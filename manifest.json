@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Civitai Helper",
+  "version": "0.1",
+  "description": "A simple extension to prove the setup works.",
+  "content_scripts": [
+    {
+      "js": ["scripts/content.js"],
+      "matches": [
+        "https://civitai.com/posts/*"
+      ]
+    }
+  ]
+}
