@@ -1,3 +1,6 @@
+import mediaInfoFactory from '../lib/mediainfo.min.js';
+let mediaInfoInstance = null;
+
 console.log("✅ Hello from the Civitai Helper content script!");
 
 let videoToUpload = null;
@@ -62,7 +65,7 @@ banner.appendChild(statusSpan);
 const retryButton = document.createElement('button');
 retryButton.textContent = 'Delete Post & Reload';
 retryButton.style.marginLeft = '15px'; retryButton.style.padding = '5px 10px'; retryButton.style.border = '1px solid #555'; retryButton.style.borderRadius = '5px'; retryButton.style.backgroundColor = '#c0392b'; retryButton.style.color = 'white'; retryButton.style.cursor = 'pointer';
-retryButton.style.display = 'none'; 
+retryButton.style.display = 'none';
 banner.appendChild(retryButton);
 
 
@@ -91,7 +94,7 @@ function createMetadataModal() {
         input.style.padding = '5px';
         return input;
     };
-    
+
     const createNumberInput = (id) => {
         const input = createTextInput(id);
         input.type = 'number';
@@ -121,7 +124,7 @@ function createMetadataModal() {
         width: '800px', maxHeight: '90vh', overflowY: 'auto'
     });
     modalOverlay.appendChild(modalContainer);
-    
+
     // --- Modal Content ---
     modalContainer.innerHTML = `
         <h2 style="margin-top:0; border-bottom: 1px solid #555; padding-bottom: 10px;">Video Post Metadata</h2>
@@ -149,7 +152,7 @@ function createMetadataModal() {
     imageSection.appendChild(createInputRow('Tools (;):', createTextInput('ch-image-tools')));
     imageSection.appendChild(createInputRow('Techniques (;):', createTextInput('ch-image-techniques')));
     modalContainer.appendChild(imageSection);
-    
+
     // --- Common Section ---
     const commonSection = document.createElement('div');
     commonSection.innerHTML = '<h3 style="margin-top: 20px;">Common Settings</h3>';
@@ -203,14 +206,14 @@ function handlePostButtonClick() {
         videoResources: document.getElementById('ch-video-resources').value,
         videoTools: document.getElementById('ch-video-tools').value,
         videoTechniques: document.getElementById('ch-video-techniques').value,
-        
+
         imageResources: document.getElementById('ch-image-resources').value,
         imageTools: document.getElementById('ch-image-tools').value,
         imageTechniques: document.getElementById('ch-image-techniques').value,
-        
+
         commonOffset: document.getElementById('ch-common-offset').value
     };
-    
+
     console.log("✅ Metadata captured:", capturedData);
     alert("Metadata saved. The script will use this data to fill the form once the 'Post' action is implemented.");
     hideModal();
@@ -222,13 +225,99 @@ function handlePostButtonClick() {
 // --- LOGIC ---
 
 /**
+ * Recursively searches a deeply nested object for a key named 'comment'
+ * that has a string value (our expected JSON).
+ * @param {object} obj The object to search within.
+ * @returns {string|null} The value of the 'comment' property if found, otherwise null.
+ */
+function findCommentRecursively(obj) {
+    // Check if the current object is valid
+    if (obj === null || typeof obj !== 'object') {
+        return null;
+    }
+    console.log("Inspecting object:", obj);
+
+    // Check if the current object has the 'comment' key with a string value
+    if (obj.hasOwnProperty('comment') && typeof obj['comment'] === 'string') {
+        return obj['comment'];
+    }
+
+    // If not found, recursively search in all object properties
+    for (const key in obj) {
+        if (obj.hasOwnProperty(key)) {
+            console.log("Searching key:", key);
+            const result = findCommentRecursively(obj[key]);
+            // If we found the comment in a nested object, return it immediately
+            if (result !== null) {
+                return result;
+            }
+        }
+    }
+
+    // If we've searched everything and found nothing, return null
+    return null;
+}
+
+function readVideoMetadata(file) {
+    return new Promise((resolve, reject) => {
+        const sandboxIframe = document.createElement('iframe');
+        sandboxIframe.src = chrome.runtime.getURL('scripts/sandbox.html');
+        sandboxIframe.style.display = 'none';
+        document.body.appendChild(sandboxIframe);
+
+        const timeout = setTimeout(() => {
+            cleanup();
+            reject(new Error("Metadata reading timed out."));
+        }, 15000);
+
+        const messageListener = (event) => {
+            if (event.source !== sandboxIframe.contentWindow) return;
+
+            if (event.data.type === 'metadataResult') {
+                const extractedData = event.data.data;
+                cleanup();
+
+                if (!extractedData || Object.keys(extractedData).length === 0) {
+                    console.log("Sandbox returned no extracted workflow data.");
+                    return resolve(null);
+                }
+
+                console.log("✅ SUCCESS via sandbox:", extractedData);
+                resolve(extractedData);
+            } else if (event.data.type === 'metadataError') {
+                console.log("Sandbox reported an error:", event.data.error);
+                cleanup();
+                reject(new Error(event.data.error));
+            }
+        };
+
+        const cleanup = () => {
+            console.log("Cleaning up sandbox iframe and listeners...");
+            clearTimeout(timeout);
+            window.removeEventListener('message', messageListener);
+            document.body.removeChild(sandboxIframe);
+        };
+
+        console.log("Sending file to sandbox for processing...");
+        window.addEventListener('message', messageListener);
+
+        sandboxIframe.onload = () => {
+            console.log("Sandbox iframe loaded, sending file...");
+            const wasmUrl = chrome.runtime.getURL('lib/MediaInfoModule.wasm');
+            sandboxIframe.contentWindow.postMessage({ file: file, wasmUrl: wasmUrl }, '*');
+        };
+    });
+}
+
+
+/**
  * Checks if the current page is the video upload page and toggles the banner's visibility.
  */
 function checkPageAndToggleBanner() {
-    const isUploadPage = 
-    (window.location.href.startsWith('https://civitai.com/posts/create') || 
-    (window.location.href.startsWith('https://civitai.com/posts/') && (window.location.href.indexOf('/edit?video=true') > 0)));
-    if (banner) { 
+    const isUploadPage =
+        (window.location.href.startsWith('https://civitai.com/posts/create') ||
+            (window.location.href.startsWith('https://civitai.com/posts/') && (window.location.href.indexOf('/edit?video=true') > 0)));
+    if (banner) {
         banner.style.display = isUploadPage ? 'flex' : 'none';
     }
 }
@@ -240,14 +329,14 @@ function setBannerToInitialState() {
     statusSpan.textContent = '';
     retryButton.style.display = 'none';
     initialUIElements.forEach(el => el.style.display = 'inline-block');
-    checkUploadability(); 
+    checkUploadability();
 }
 
 function setBannerToWorkingState() {
     statusSpan.textContent = '';
     retryButton.style.display = 'none';
     initialUIElements.forEach(el => el.style.display = 'none');
-    checkUploadability(); 
+    checkUploadability();
 }
 
 
@@ -274,7 +363,7 @@ retryButton.addEventListener('click', deletePost);
 // --- PAGE VISIBILITY OBSERVER ---
 checkPageAndToggleBanner();
 const pageObserver = new MutationObserver(() => {
-  checkPageAndToggleBanner();
+    checkPageAndToggleBanner();
 });
 pageObserver.observe(document.body, { childList: true, subtree: true });
 
@@ -283,9 +372,36 @@ function checkUploadability() {
     uploadButton.disabled = !videoToUpload;
 }
 
-videoInput.addEventListener('change', () => {
+videoInput.addEventListener('change', async () => {
     videoToUpload = videoInput.files.length > 0 ? videoInput.files[0] : null;
     checkUploadability();
+
+    if (videoToUpload) {
+        try {
+            console.log("Video upload started calling MediaInfo.js...");
+            // Attempt to read metadata and pre-fill the form
+            const metadata = await readVideoMetadata(videoToUpload);
+            console.log("Video metadata:", metadata);
+            console.log("Video metadata:", JSON.stringify(metadata));
+            if (metadata && metadata.prompt) { // Check if metadata and a prompt exist
+
+                // Ensure the modal exists before trying to populate it
+                if (!metadataModal) createMetadataModal();
+
+                // Populate fields. Use '|| ""' as a fallback for missing values.
+                document.getElementById('ch-video-prompt').value = metadata.prompt || '';
+                document.getElementById('ch-video-neg-prompt').value = metadata.negative_prompt || '';
+                document.getElementById('ch-video-steps').value = metadata.steps || '';
+                document.getElementById('ch-video-sampler').value = metadata.sampler_name || '';
+                document.getElementById('ch-video-seed').value = metadata.seed || '';
+                document.getElementById('ch-video-guidance').value = metadata.cfg || '';
+
+                console.log("✅ Modal fields pre-filled from video metadata.");
+            }
+        } catch (error) {
+            console.error("Failed to read or process video metadata:", error);
+        }
+    }
 });
 
 imageInput.addEventListener('change', () => {

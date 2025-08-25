@@ -5,10 +5,24 @@
   "description": "A simple extension to prove the setup works.",
   "content_scripts": [
     {
-      "js": ["scripts/content.js"],
+      "js": [
+        "dist/scripts/content.js"
+      ],
       "matches": [
         "https://civitai.com/posts/*"
       ]
+    }
+  ],
+  "sandbox": {
+    "pages": [ "scripts/sandbox.html" ]
+  },
+  "content_security_policy": {
+    "sandbox": "sandbox allow-scripts"
+  },  
+  "web_accessible_resources": [
+    {
+      "resources": [ "scripts/sandbox.html", "scripts/sandbox.js", "lib/mediainfo.min.js", "lib/MediaInfoModule.wasm" ],
+      "matches": [ "https://civitai.com/*" ]
     }
   ]
 }

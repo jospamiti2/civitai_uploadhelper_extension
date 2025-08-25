@@ -1,0 +1,29 @@
+{
+  "name": "civitaihelper",
+  "version": "1.0.0",
+  "main": "index.js",
+  "directories": {
+    "lib": "lib"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "webpack"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jospamiti2/civitai_uploadhelper_extension.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/jospamiti2/civitai_uploadhelper_extension/issues"
+  },
+  "homepage": "https://github.com/jospamiti2/civitai_uploadhelper_extension#readme",
+  "description": "",
+  "devDependencies": {
+    "copy-webpack-plugin": "^13.0.1",
+    "webpack": "^5.101.3",
+    "webpack-cli": "^6.0.1"
+  }
+}
