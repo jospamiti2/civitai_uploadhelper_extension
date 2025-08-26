@@ -69,6 +69,49 @@ retryButton.style.display = 'none';
 banner.appendChild(retryButton);
 
 
+function populateModalWithData(data) {
+    if (!data) return;
+
+    // Helper to set value if element exists
+    const setInputValue = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.value = value || '';
+    };
+
+    // --- Populate Video Fields ---
+    setInputValue('ch-video-prompt', data.positive_prompt);
+    setInputValue('ch-video-neg-prompt', data.negative_prompt);
+    setInputValue('ch-video-guidance', data.cfg);
+    setInputValue('ch-video-steps', data.steps);
+    setInputValue('ch-video-sampler', data.sampler_name);
+    setInputValue('ch-video-seed', data.seed);
+
+    // --- Populate Resources ---
+    // Combine base model and LoRAs into the resources field for now
+    if (data.resources) {
+        const resources = [];
+        if (data.resources.base_model) {
+            resources.push(data.resources.base_model);
+        }
+        if (data.resources.loras && data.resources.loras.length > 0) {
+            resources.push(...data.resources.loras);
+        }
+        setInputValue('ch-video-resources', resources.join('; '));
+    }
+}
+
+function clearModalFields() {
+    const idsToClear = [
+        'ch-video-prompt', 'ch-video-neg-prompt', 'ch-video-guidance',
+        'ch-video-steps', 'ch-video-sampler', 'ch-video-seed', 'ch-video-resources'
+    ];
+    idsToClear.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+}
+
+
 // --- METADATA MODAL CREATION ---
 function createMetadataModal() {
     // Helper function to create labeled input rows
@@ -376,26 +419,16 @@ videoInput.addEventListener('change', async () => {
     videoToUpload = videoInput.files.length > 0 ? videoInput.files[0] : null;
     checkUploadability();
 
+    if (!metadataModal) createMetadataModal();
+
+    clearModalFields();
+
     if (videoToUpload) {
         try {
-            console.log("Video upload started calling MediaInfo.js...");
             // Attempt to read metadata and pre-fill the form
             const metadata = await readVideoMetadata(videoToUpload);
-            console.log("Video metadata:", metadata);
-            console.log("Video metadata:", JSON.stringify(metadata));
-            if (metadata && metadata.prompt) { // Check if metadata and a prompt exist
-
-                // Ensure the modal exists before trying to populate it
-                if (!metadataModal) createMetadataModal();
-
-                // Populate fields. Use '|| ""' as a fallback for missing values.
-                document.getElementById('ch-video-prompt').value = metadata.prompt || '';
-                document.getElementById('ch-video-neg-prompt').value = metadata.negative_prompt || '';
-                document.getElementById('ch-video-steps').value = metadata.steps || '';
-                document.getElementById('ch-video-sampler').value = metadata.sampler_name || '';
-                document.getElementById('ch-video-seed').value = metadata.seed || '';
-                document.getElementById('ch-video-guidance').value = metadata.cfg || '';
-
+            if (metadata) {
+                populateModalWithData(metadata);
                 console.log("✅ Modal fields pre-filled from video metadata.");
             }
         } catch (error) {

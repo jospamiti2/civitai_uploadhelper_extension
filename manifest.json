@@ -13,12 +13,26 @@
       ]
     }
   ],
+  "permissions": [
+    "storage" 
+  ],  
   "sandbox": {
     "pages": [ "scripts/sandbox.html" ]
   },
   "content_security_policy": {
     "sandbox": "sandbox allow-scripts"
   },  
+  "action": {
+    "default_icon": {
+      "48": "icons/CivitAiUploadAHelperIcon_48x48.png"
+    },
+    "default_title": "Civitai Helper"
+  },
+  "icons": {
+     "48": "icons/CivitAiUploadAHelperIcon_48x48.png",
+     "128": "icons/CivitAiUploadAHelperIcon_128x128.png" 
+  },  
+  "options_page": "options.html",
   "web_accessible_resources": [
     {
       "resources": [ "scripts/sandbox.html", "scripts/sandbox.js", "lib/mediainfo.min.js", "lib/MediaInfoModule.wasm" ],
