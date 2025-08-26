@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Civitai Helper Mappings</title>
+    <style>
+        body { font-family: sans-serif; width: 600px; padding: 10px; background-color: #f4f4f4; }
+        h3 { margin-top: 0; }
+        #mappingsContainer { max-height: 400px; overflow-y: auto; border: 1px solid #ddd; background-color: white; padding: 10px; border-radius: 4px; }
+        .mapping-item { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 10px; align-items: center; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #eee; }
+        .mapping-item:last-child { border-bottom: none; }
+        .mapping-item label { font-weight: bold; font-size: 12px; color: #555; }
+        .mapping-item input { width: 100%; padding: 5px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 3px; }
+        .mapping-item button { background-color: #e74c3c; color: white; border: none; cursor: pointer; padding: 5px 8px; border-radius: 3px; }
+        #controls { margin-top: 15px; display: flex; justify-content: space-between; align-items: center; }
+        #status { font-weight: bold; color: green; }
+    </style>
+</head>
+<body>
+    <h3>LoRA Mappings</h3>
+    <div id="mappingsContainer">
+        <!-- Mapping items will be dynamically inserted here -->
+    </div>
+    <div id="controls">
+        <button id="addNewButton">Add New Mapping</button>
+        <button id="saveButton">Save All Mappings</button>
+        <div id="status"></div>
+    </div>
+
+    <script src="options.js"></script>
+</body>
+</html>
