@@ -19,6 +19,7 @@ module.exports = {
         { from: 'options.html', to: 'options.html' }, 
         { from: 'options.js', to: 'options.js' },       
         { from: 'icons', to: 'icons' }, 
+        { from: 'background.js', to: 'background.js' },
       ],
     }),
   ],
