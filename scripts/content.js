@@ -1,5 +1,5 @@
-import mediaInfoFactory from '../lib/mediainfo.min.js';
 let mediaInfoInstance = null;
+import mediaInfoFactory from '../lib/mediainfo.min.js';
 
 console.log("✅ Hello from the Civitai Helper content script!");
 
@@ -69,7 +69,7 @@ retryButton.style.display = 'none';
 banner.appendChild(retryButton);
 
 
-function populateModalWithData(data) {
+async function populateModalWithData(data) {
     if (!data) return;
 
     // Helper to set value if element exists
@@ -78,28 +78,59 @@ function populateModalWithData(data) {
         if (el) el.value = value || '';
     };
 
-    // --- Populate Video Fields ---
+    // --- Populate standard video fields ---
     setInputValue('ch-video-prompt', data.positive_prompt);
     setInputValue('ch-video-neg-prompt', data.negative_prompt);
     setInputValue('ch-video-guidance', data.cfg);
     setInputValue('ch-video-steps', data.steps);
     setInputValue('ch-video-sampler', data.sampler_name);
     setInputValue('ch-video-seed', data.seed);
+    setInputValue('ch-base-model', data.resources?.base_model);
 
-    // --- Populate Resources ---
-    // Combine base model and LoRAs into the resources field for now
-    if (data.resources) {
-        const resources = [];
-        if (data.resources.base_model) {
-            resources.push(data.resources.base_model);
+    // --- Populate the dynamic LoRA lists ---
+    const recognizedContainer = document.getElementById('ch-recognized-loras');
+    const unrecognizedContainer = document.getElementById('ch-unrecognized-loras');
+    recognizedContainer.innerHTML = ''; // Clear previous entries
+    unrecognizedContainer.innerHTML = ''; // Clear previous entries
+
+    // 1. Get the user's saved mappings from storage
+    const storage = await chrome.storage.local.get('loraMappings');
+    const loraMappings = storage.loraMappings || {};
+
+    // 2. Process each LoRA found in the video metadata
+    if (data.resources?.loras) {
+        for (const filename of data.resources.loras) {
+            if (loraMappings[filename]) {
+                // It's recognized! Create a row in the recognized container.
+                const knownData = loraMappings[filename];
+                createLoraRow(recognizedContainer, {
+                    filename: filename,
+                    title: knownData.title,
+                    version: knownData.version
+                });
+            } else {
+                // It's unrecognized. Create a row in the other container.
+                createLoraRow(unrecognizedContainer, { filename: filename });
+            }
         }
-        if (data.resources.loras && data.resources.loras.length > 0) {
-            resources.push(...data.resources.loras);
-        }
-        setInputValue('ch-video-resources', resources.join('; '));
     }
-}
 
+    // 3. Hook up the 'Add Manual Resource' button
+    document.getElementById('ch-add-resource-btn').onclick = () => {
+        // Adds a new, blank row
+        createLoraRow(unrecognizedContainer, { filename: '' });
+
+        // Get the row we just added (it's always the last one)
+        const newRow = unrecognizedContainer.lastElementChild;
+        if (newRow) {
+            const filenameInput = newRow.querySelector('.filename');
+            // Make this specific input field editable and restyle it
+            filenameInput.removeAttribute('readonly');
+            filenameInput.style.backgroundColor = 'white';
+            filenameInput.style.color = 'black';
+        }
+    };
+}
 function clearModalFields() {
     const idsToClear = [
         'ch-video-prompt', 'ch-video-neg-prompt', 'ch-video-guidance',
@@ -114,45 +145,32 @@ function clearModalFields() {
 
 // --- METADATA MODAL CREATION ---
 function createMetadataModal() {
-    // Helper function to create labeled input rows
+    // --- Helper functions for creating UI elements ---
     const createInputRow = (label, inputElement) => {
         const row = document.createElement('div');
-        row.style.display = 'flex';
-        row.style.alignItems = 'center';
-        row.style.marginBottom = '10px';
+        row.style.display = 'flex'; row.style.alignItems = 'center'; row.style.marginBottom = '10px';
         const labelEl = document.createElement('label');
-        labelEl.textContent = label;
-        labelEl.style.width = '150px';
-        labelEl.style.flexShrink = '0';
+        labelEl.textContent = label; labelEl.style.width = '150px'; labelEl.style.flexShrink = '0';
         row.appendChild(labelEl);
         row.appendChild(inputElement);
         return row;
     };
-
     const createTextInput = (id) => {
         const input = document.createElement('input');
-        input.type = 'text';
-        input.id = id;
-        input.style.width = '100%';
-        input.style.padding = '5px';
+        input.type = 'text'; input.id = id; input.style.width = '100%'; input.style.padding = '5px';
         return input;
     };
-
     const createNumberInput = (id) => {
-        const input = createTextInput(id);
-        input.type = 'number';
+        const input = createTextInput(id); input.type = 'number';
         return input;
-    }
-
+    };
     const createTextarea = (id, rows = 2) => {
         const textarea = document.createElement('textarea');
-        textarea.id = id;
-        textarea.rows = rows;
-        textarea.style.width = '100%';
-        textarea.style.padding = '5px';
+        textarea.id = id; textarea.rows = rows; textarea.style.width = '100%'; textarea.style.padding = '5px';
         return textarea;
     };
 
+    // --- Main Modal Structure ---
     const modalOverlay = document.createElement('div');
     modalOverlay.id = 'ch-modal-overlay';
     Object.assign(modalOverlay.style, {
@@ -164,53 +182,95 @@ function createMetadataModal() {
     const modalContainer = document.createElement('div');
     Object.assign(modalContainer.style, {
         backgroundColor: '#34495e', padding: '20px', borderRadius: '8px',
-        width: '800px', maxHeight: '90vh', overflowY: 'auto'
+        width: '900px', maxHeight: '90vh', overflowY: 'auto', color: 'white'
     });
     modalOverlay.appendChild(modalContainer);
 
-    // --- Modal Content ---
-    modalContainer.innerHTML = `
-        <h2 style="margin-top:0; border-bottom: 1px solid #555; padding-bottom: 10px;">Video Post Metadata</h2>
-    `;
-
-    // --- Video Section ---
+    // --- Video Section (Prompt, Seed, etc.) ---
     const videoSection = document.createElement('div');
-    videoSection.innerHTML = '<h3>Video Generation Data</h3>';
+    videoSection.innerHTML = '<h3 style="margin-top:0;">Video Generation Data</h3>';
     videoSection.appendChild(createInputRow('Prompt:', createTextarea('ch-video-prompt', 4)));
     videoSection.appendChild(createInputRow('Negative Prompt:', createTextarea('ch-video-neg-prompt', 4)));
     videoSection.appendChild(createInputRow('Guidance Scale:', createNumberInput('ch-video-guidance')));
     videoSection.appendChild(createInputRow('Steps:', createNumberInput('ch-video-steps')));
     videoSection.appendChild(createInputRow('Sampler:', createTextInput('ch-video-sampler')));
     videoSection.appendChild(createInputRow('Seed:', createNumberInput('ch-video-seed')));
-    videoSection.appendChild(createInputRow('Resources (;):', createTextInput('ch-video-resources')));
-    videoSection.appendChild(createInputRow('Tools (;):', createTextInput('ch-video-tools')));
-    videoSection.appendChild(createInputRow('Techniques (;):', createTextInput('ch-video-techniques')));
     modalContainer.appendChild(videoSection);
 
-    // --- Image Section ---
+    // --- NEW: Resources Section ---
+    const resourcesSection = document.createElement('div');
+    resourcesSection.innerHTML = `<h3 style="margin-top: 20px; border-top: 1px solid #555; padding-top: 15px;">Resources</h3>`;
+
+    // Sub-section for the Base Model
+    const baseModelSection = createInputRow('Base Model:', createTextInput('ch-base-model'));
+    resourcesSection.appendChild(baseModelSection);
+
+    // Container for Recognized LoRAs
+    resourcesSection.innerHTML += '<h4 style="margin-bottom: 5px;">Recognized LoRAs</h4>';
+    const recognizedLorasContainer = document.createElement('div');
+    recognizedLorasContainer.id = 'ch-recognized-loras';
+    resourcesSection.appendChild(recognizedLorasContainer);
+
+    // Container for Unrecognized LoRAs
+    resourcesSection.innerHTML += '<h4 style="margin-top: 15px; margin-bottom: 5px;">Unrecognized LoRAs</h4>';
+    const unrecognizedLorasContainer = document.createElement('div');
+    unrecognizedLorasContainer.id = 'ch-unrecognized-loras';
+    resourcesSection.appendChild(unrecognizedLorasContainer);
+
+    // Controls for adding new resources
+    const addResourceButton = document.createElement('button');
+    addResourceButton.id = 'ch-add-resource-btn';
+    addResourceButton.textContent = 'Add Manual Resource';
+    addResourceButton.style.marginTop = '10px';
+    resourcesSection.appendChild(addResourceButton);
+    modalContainer.appendChild(resourcesSection);
+    addResourceButton.style.padding = '5px 10px';
+    addResourceButton.style.border = '1px solid #777';
+    addResourceButton.style.borderRadius = '4px';
+    addResourceButton.style.backgroundColor = '#5f6a78';
+    addResourceButton.style.color = 'white';
+    addResourceButton.style.cursor = 'pointer';    
+
     const imageSection = document.createElement('div');
     imageSection.id = 'ch-image-section';
+    imageSection.style.display = 'block'; 
     imageSection.innerHTML = '<h3 style="margin-top: 20px;">Image Generation Data</h3>';
     imageSection.appendChild(createInputRow('Resources (;):', createTextInput('ch-image-resources')));
     imageSection.appendChild(createInputRow('Tools (;):', createTextInput('ch-image-tools')));
     imageSection.appendChild(createInputRow('Techniques (;):', createTextInput('ch-image-techniques')));
     modalContainer.appendChild(imageSection);
 
-    // --- Common Section ---
-    const commonSection = document.createElement('div');
-    commonSection.innerHTML = '<h3 style="margin-top: 20px;">Common Settings</h3>';
-    commonSection.appendChild(createInputRow('Offset to publish (minutes):', createNumberInput('ch-common-offset')));
-    modalContainer.appendChild(commonSection);
 
-    // --- Actions ---
+    // --- Actions & Settings Link ---
+    const footer = document.createElement('div');
+    footer.style.display = 'flex';
+    footer.style.justifyContent = 'space-between';
+    footer.style.alignItems = 'center';
+    footer.style.marginTop = '20px';
+    footer.style.paddingTop = '15px';
+    footer.style.borderTop = '1px solid #555';
+
     const postButton = document.createElement('button');
     postButton.textContent = 'Save & Post Later';
     Object.assign(postButton.style, {
-        marginTop: '20px', padding: '10px 20px', fontSize: '16px',
-        backgroundColor: '#27ae60', color: 'white', border: 'none',
-        borderRadius: '5px', cursor: 'pointer'
+        padding: '10px 20px', fontSize: '16px', backgroundColor: '#27ae60',
+        color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'
     });
-    modalContainer.appendChild(postButton);
+
+    const settingsLink = document.createElement('a');
+    settingsLink.textContent = 'Edit LoRA Mappings';
+    settingsLink.href = '#'; // Make it a dummy link
+    settingsLink.style.color = '#3498db';
+    settingsLink.style.cursor = 'pointer';
+
+    settingsLink.addEventListener('click', (event) => {
+        event.preventDefault(); // Stop the link from navigating
+        chrome.runtime.sendMessage({ action: "showOptions" });
+    });
+
+    footer.appendChild(settingsLink);
+    footer.appendChild(postButton);
+    modalContainer.appendChild(footer);
 
     document.body.appendChild(modalOverlay);
     metadataModal = modalOverlay; // Assign to global variable
@@ -222,11 +282,42 @@ function createMetadataModal() {
     });
 }
 
+/**
+ * Creates and appends a single LoRA resource row to a given container.
+ * @param {HTMLElement} container - The container to append the row to.
+ * @param {object} loraData - The data for the LoRA.
+ * @param {string} loraData.filename - The LoRA's filename.
+ * @param {string} [loraData.title=''] - The Civitai title (if known).
+ * @param {string} [loraData.version=''] - The Civitai version (if known).
+ */
+function createLoraRow(container, { filename, title = '', version = '' }) {
+    const item = document.createElement('div');
+    item.className = 'lora-item';
+    item.style.display = 'grid';
+    item.style.gridTemplateColumns = '1fr 1fr 1fr auto';
+    item.style.gap = '10px';
+    item.style.alignItems = 'center';
+    item.style.marginBottom = '5px';
+
+    item.innerHTML = `
+        <input type="text" class="filename" value="${filename}" readonly style="background-color:#4a627a; color: #ccc;">
+        <input type="text" class="title" value="${title}" placeholder="Civitai Title/Search Term">
+        <input type="text" class="version" value="${version}" placeholder="Version ID">
+        <button class="delete-btn" style="background-color:#c0392b; color:white; border:none; cursor:pointer;">X</button>
+    `;
+
+    item.querySelector('.delete-btn').addEventListener('click', () => item.remove());
+    container.appendChild(item);
+}
+
+
 function showModal() {
     if (!metadataModal) createMetadataModal();
-    const imageSection = metadataModal.querySelector('#ch-image-section');
-    imageSection.style.display = imageToUpload ? 'block' : 'none';
     metadataModal.style.display = 'flex';
+    //const imageSection = document.getElementById('ch-image-section');
+    //if (imageSection) {
+    //    imageSection.style.display = imageToUpload ? 'block' : 'none';
+    //}
 }
 
 window.showModal = showModal;
@@ -440,6 +531,12 @@ videoInput.addEventListener('change', async () => {
 imageInput.addEventListener('change', () => {
     imageToUpload = imageInput.files.length > 0 ? imageInput.files[0] : null;
     checkUploadability();
+
+    if (!metadataModal) createMetadataModal();
+    //const imageSection = document.getElementById('ch-image-section');
+    //if (imageSection) {
+    //    imageSection.style.display = imageToUpload ? 'block' : 'none';
+    //}    
 });
 
 uploadButton.addEventListener('click', runUploadOrchestrator);
