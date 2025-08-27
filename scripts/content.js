@@ -57,6 +57,34 @@ uploadButton.disabled = true;
 uploadButton.style.marginLeft = '15px'; uploadButton.style.padding = '5px 10px'; uploadButton.style.border = '1px solid #555'; uploadButton.style.borderRadius = '5px'; uploadButton.style.backgroundColor = '#3498db'; uploadButton.style.color = 'white'; uploadButton.style.cursor = 'pointer';
 banner.appendChild(uploadButton);
 
+const openDetailsButton = document.createElement('button');
+openDetailsButton.textContent = 'Open Details';
+openDetailsButton.style.display = 'none'; // Hidden by default
+openDetailsButton.style.marginLeft = '15px';
+openDetailsButton.style.padding = '5px 10px';
+openDetailsButton.style.border = '1px solid #555';
+openDetailsButton.style.borderRadius = '5px';
+openDetailsButton.style.backgroundColor = '#2980b9';
+openDetailsButton.style.color = 'white';
+openDetailsButton.style.cursor = 'pointer';
+openDetailsButton.addEventListener('click', showModal);
+banner.appendChild(openDetailsButton);
+
+const retryBannerButton = document.createElement('button');
+retryBannerButton.textContent = 'Retry Upload';
+retryBannerButton.style.display = 'none';
+Object.assign(retryBannerButton.style, {
+    marginLeft: '15px',
+    padding: '5px 10px',
+    border: '1px solid #555',
+    borderRadius: '5px',
+    backgroundColor: '#e67e22',
+    color: 'white',
+    cursor: 'pointer'
+});
+retryBannerButton.onclick = runUploadOrchestrator;
+banner.appendChild(retryBannerButton);
+
 // New elements for status and error handling
 const statusSpan = document.createElement('span');
 statusSpan.style.marginLeft = '20px';
@@ -229,11 +257,11 @@ function createMetadataModal() {
     addResourceButton.style.borderRadius = '4px';
     addResourceButton.style.backgroundColor = '#5f6a78';
     addResourceButton.style.color = 'white';
-    addResourceButton.style.cursor = 'pointer';    
+    addResourceButton.style.cursor = 'pointer';
 
     const imageSection = document.createElement('div');
     imageSection.id = 'ch-image-section';
-    imageSection.style.display = 'block'; 
+    imageSection.style.display = 'block';
     imageSection.innerHTML = '<h3 style="margin-top: 20px;">Image Generation Data</h3>';
     imageSection.appendChild(createInputRow('Resources (;):', createTextInput('ch-image-resources')));
     imageSection.appendChild(createInputRow('Tools (;):', createTextInput('ch-image-tools')));
@@ -250,12 +278,39 @@ function createMetadataModal() {
     footer.style.paddingTop = '15px';
     footer.style.borderTop = '1px solid #555';
 
+    // This div will group the status and the button on the right side
+    const rightFooter = document.createElement('div');
+    rightFooter.style.display = 'flex';
+    rightFooter.style.alignItems = 'center';
+
+    const modalStatusSpan = document.createElement('span');
+    modalStatusSpan.id = 'ch-modal-status';
+    modalStatusSpan.style.marginRight = '20px';
+    modalStatusSpan.style.color = '#ecf0f1';
+    rightFooter.appendChild(modalStatusSpan);
+
+
     const postButton = document.createElement('button');
+    postButton.id = 'ch-modal-post-btn';
     postButton.textContent = 'Save & Post Later';
     Object.assign(postButton.style, {
         padding: '10px 20px', fontSize: '16px', backgroundColor: '#27ae60',
         color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'
     });
+    const updatePostButtonStyle = () => {
+        if (postButton.disabled) {
+            postButton.style.backgroundColor = '#7f8c8d'; // Muted grey color
+            postButton.style.cursor = 'not-allowed';
+        } else {
+            postButton.style.backgroundColor = '#27ae60'; // Original green color
+            postButton.style.cursor = 'pointer';
+        }
+    };
+    const buttonObserver = new MutationObserver(updatePostButtonStyle);
+    buttonObserver.observe(postButton, { attributes: true, attributeFilter: ['disabled'] });
+
+    // Call it once immediately to set the initial style
+    updatePostButtonStyle();
 
     const settingsLink = document.createElement('a');
     settingsLink.textContent = 'Edit LoRA Mappings';
@@ -269,11 +324,22 @@ function createMetadataModal() {
     });
 
     footer.appendChild(settingsLink);
+    footer.appendChild(rightFooter);
     footer.appendChild(postButton);
     modalContainer.appendChild(footer);
 
+    const closeButton = document.createElement('button');
+    closeButton.textContent = 'X';
+    Object.assign(closeButton.style, {
+        position: 'absolute', top: '10px', right: '10px', background: 'none',
+        border: 'none', color: 'white', fontSize: '20px', cursor: 'pointer'
+    });
+    closeButton.addEventListener('click', hideModal);
+    modalContainer.style.position = 'relative';
+    modalContainer.appendChild(closeButton);
+
     document.body.appendChild(modalOverlay);
-    metadataModal = modalOverlay; // Assign to global variable
+    metadataModal = modalOverlay;
 
     // --- Event Listeners ---
     postButton.addEventListener('click', handlePostButtonClick);
@@ -549,6 +615,10 @@ uploadButton.addEventListener('click', runUploadOrchestrator);
 async function runUploadOrchestrator() {
     if (!videoToUpload) return;
 
+    uploadButton.style.display = 'none';
+    openDetailsButton.style.display = 'inline-block';
+    retryBannerButton.style.display = 'none';
+    document.getElementById('ch-modal-post-btn').disabled = true;
     showModal();
 
     setBannerToWorkingState();
@@ -576,9 +646,12 @@ async function runUploadOrchestrator() {
 
         statusSpan.style.color = 'white'; // Reset color on success
         statusSpan.textContent = '✅ All uploads complete! You can now fill out the form.';
+        document.getElementById('ch-modal-post-btn').disabled = false;
 
     } catch (error) {
         console.error('Orchestrator failed:', error);
+        openDetailsButton.style.display = 'none';
+        retryBannerButton.style.display = 'inline-block';
         setBannerToErrorState(error.message);
     } finally {
         // Re-enable the button once the process is truly finished or failed
@@ -590,20 +663,28 @@ async function runUploadOrchestrator() {
 
 async function manageUploadLifecycle(config) {
     const MAX_RETRIES = 3;
+    const modalStatusSpan = document.getElementById('ch-modal-status');
+
+    const updateStatus = (message) => {
+        statusSpan.textContent = message;
+        if (modalStatusSpan) {
+            modalStatusSpan.textContent = message;
+        }
+    };
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
             // 1. ATTEMPT UPLOAD
-            statusSpan.textContent = `⏳ Uploading ${config.name}... (Attempt ${attempt}/${MAX_RETRIES})`;
+            updateStatus(`⏳ Uploading ${config.name}... (Attempt ${attempt}/${MAX_RETRIES})`);
             triggerUpload([config.file]);
 
             // 2. MONITOR PROGRESS (Wait for progress bar to appear, then disappear)
             await waitForElement(config.progressSelector, 15000); // 15s timeout to appear
-            statusSpan.textContent = `⏳ Processing ${config.name}...`;
+            updateStatus(`⏳ Processing ${config.name}...`);
             await waitForElementToDisappear(config.progressSelector, 120000); // 2min timeout to disappear
 
             // 3. VERIFY OUTCOME (Wait for the final element to appear)
-            statusSpan.textContent = `⏳ Verifying ${config.name}...`;
+            updateStatus(`⏳ Verifying ${config.name}...`);
             await waitForElement(config.successSelector, 60000); // 60s grace period
 
             // If all awaits complete without throwing an error, the upload was a success!
