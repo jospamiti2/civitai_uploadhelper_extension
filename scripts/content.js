@@ -7,6 +7,9 @@ let videoToUpload = null;
 let imageToUpload = null;
 let metadataModal = null;
 
+let videoContainerElement = null;
+let imageContainerElement = null;
+
 
 
 // --- UI CREATION ---
@@ -425,37 +428,82 @@ function handlePostButtonClick() {
 // --- LOGIC ---
 
 /**
- * Recursively searches a deeply nested object for a key named 'comment'
- * that has a string value (our expected JSON).
- * @param {object} obj The object to search within.
- * @returns {string|null} The value of the 'comment' property if found, otherwise null.
+ * Searches the DOM for the unique "Edit/Preview" tab bar and returns its main parent container.
+ * This is the reliable anchor for finding newly uploaded content.
+ * @returns {HTMLElement|null} The container element if found, otherwise null.
  */
-function findCommentRecursively(obj) {
-    // Check if the current object is valid
-    if (obj === null || typeof obj !== 'object') {
-        return null;
-    }
-    console.log("Inspecting object:", obj);
+function findUniqueEditTabsContainer() {
+    // 1. Find all potential tab lists on the page.
+    const allTabLists = document.querySelectorAll('div.mantine-Tabs-list');
 
-    // Check if the current object has the 'comment' key with a string value
-    if (obj.hasOwnProperty('comment') && typeof obj['comment'] === 'string') {
-        return obj['comment'];
-    }
+    for (const list of allTabLists) {
+        // 2. For each list, check if it has the specific buttons we need.
+        const buttons = list.querySelectorAll('button.mantine-Tabs-tab');
+        const buttonLabels = Array.from(buttons).map(btn => btn.textContent.trim());
 
-    // If not found, recursively search in all object properties
-    for (const key in obj) {
-        if (obj.hasOwnProperty(key)) {
-            console.log("Searching key:", key);
-            const result = findCommentRecursively(obj[key]);
-            // If we found the comment in a nested object, return it immediately
-            if (result !== null) {
-                return result;
+        // 3. Our unique anchor has exactly an "Edit" and a "Preview" button.
+        if (buttonLabels.includes('Edit') && buttonLabels.includes('Preview')) {
+            // 4. If we found it, navigate up the DOM to the target container you identified.
+            // .mantine-Tabs-list -> .mantine-Tabs-root -> the container we want
+            const tabsRoot = list.closest('.mantine-Tabs-root');
+            if (tabsRoot) {
+                // This selector is for the parent div that contains the form, dropzone, and tabs section.
+                const mainContainer = tabsRoot.closest('.flex.min-w-0.flex-1.flex-col.gap-3');
+                if (mainContainer) {
+                    // We found our uniquely identifiable container!
+                    return mainContainer;
+                }
             }
         }
     }
 
-    // If we've searched everything and found nothing, return null
+    // If we loop through everything and find nothing, return null.
     return null;
+}
+
+/**
+ * Waits for an element to appear, but only after verifying it's inside the correct,
+ * uniquely identified container marked by the "Edit/Preview" tabs.
+ * This replaces the simple waitForElement for upload success verification.
+ * @param {string} selector The selector for the element to find (e.g., 'video').
+ * @param {number} timeout The timeout in milliseconds.
+ * @returns {Promise<HTMLElement>} A promise that resolves with the found element.
+ */
+function waitForVerifiedElement(selector, timeout) {
+    return new Promise((resolve, reject) => {
+        const check = () => {
+            const container = findUniqueEditTabsContainer();
+            if (container) {
+                const element = container.querySelector(selector);
+                if (element) {
+                    return { container, element };
+                }
+            }
+            return null; // Not found yet
+        };
+
+        // If the element already exists in the right place, resolve immediately.
+        const initialFind = check();
+        if (initialFind) {
+            return resolve(initialFind);
+        }
+
+        const timeoutId = setTimeout(() => {
+            observer.disconnect();
+            reject(new Error(`Timeout: Verified element "${selector}" did not appear within ${timeout}ms.`));
+        }, timeout);
+
+        const observer = new MutationObserver(() => {
+            const foundElement = check();
+            if (foundElement) {
+                clearTimeout(timeoutId);
+                observer.disconnect();
+                resolve(foundElement);
+            }
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+    });
 }
 
 function readVideoMetadata(file) {
@@ -627,21 +675,25 @@ async function runUploadOrchestrator() {
     try {
         const dryProgressSelector = 'div.w-full:has(.mantine-Dropzone-root) + div.mantine-Progress-root';
         // --- VIDEO LIFECYCLE ---
-        await manageUploadLifecycle({
+        const videoResult = await manageUploadLifecycle({
             file: videoToUpload,
             name: 'Video',
             progressSelector: dryProgressSelector,
             successSelector: 'video[class*="EdgeMedia_responsive"]'
         });
+        videoContainerElement = videoResult.container;
+        console.log("✅ Video container element captured directly:", videoContainerElement);        
 
         // --- IMAGE LIFECYCLE (only if an image is provided) ---
         if (imageToUpload) {
-            await manageUploadLifecycle({
+            const imageResult = await manageUploadLifecycle({
                 file: imageToUpload,
                 name: 'Image',
                 progressSelector: dryProgressSelector,
                 successSelector: 'img[class*="EdgeImage_image"]'
             });
+            imageContainerElement = imageResult.container;
+            console.log("✅ Image container element captured directly:", imageContainerElement);
         }
 
         statusSpan.style.color = 'white'; // Reset color on success
@@ -685,11 +737,11 @@ async function manageUploadLifecycle(config) {
 
             // 3. VERIFY OUTCOME (Wait for the final element to appear)
             updateStatus(`⏳ Verifying ${config.name}...`);
-            await waitForElement(config.successSelector, 60000); // 60s grace period
+            const verificationResult = await waitForVerifiedElement(config.successSelector, 60000);
 
             // If all awaits complete without throwing an error, the upload was a success!
             console.log(`✅ ${config.name} upload successful on attempt ${attempt}.`);
-            return; // Exit the loop and the function successfully
+            return verificationResult;
 
         } catch (error) {
             console.warn(`Attempt ${attempt} for ${config.name} failed:`, error.message);
