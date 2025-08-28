@@ -88,6 +88,21 @@ Object.assign(retryBannerButton.style, {
 retryBannerButton.onclick = runUploadOrchestrator;
 banner.appendChild(retryBannerButton);
 
+const testFillButton = document.createElement('button');
+testFillButton.textContent = 'Test Prompt Fill';
+testFillButton.style.display = 'none';
+Object.assign(testFillButton.style, {
+    marginLeft: '15px',
+    padding: '5px 10px',
+    border: '1px solid #555',
+    borderRadius: '5px',
+    backgroundColor: '#16a085',
+    color: 'white',
+    cursor: 'pointer'
+});
+testFillButton.onclick = initiateVideoMetadataFill;
+banner.appendChild(testFillButton);
+
 // New elements for status and error handling
 const statusSpan = document.createElement('span');
 statusSpan.style.marginLeft = '20px';
@@ -428,6 +443,56 @@ function handlePostButtonClick() {
 // --- LOGIC ---
 
 /**
+ * Finds and clicks the "EDIT" button for the video prompt and verifies the modal opens.
+ * This serves as a testbed for our form-filling logic.
+ */
+async function initiateVideoMetadataFill() {
+    console.log("🚀 Starting prompt fill test...");
+
+    if (!videoContainerElement) {
+        statusSpan.textContent = "Error: Video container element not found. Please upload a video first.";
+        console.error("Video container element not found. Please upload a video first.");
+        return;
+    }
+
+    try {
+        // --- Step 1: Find the "Prompt" header element within our specific container ---
+        // This is robust because we are NOT searching the whole document.
+        const h3Elements = videoContainerElement.querySelectorAll('h3');
+        const promptHeader = Array.from(h3Elements).find(h => h.textContent.trim() === 'Prompt');
+
+        if (!promptHeader) {
+            statusSpan.textContent = "Error: 'Prompt' heading not found in video container.";
+            throw new Error("Could not find the 'Prompt' heading element inside the video container.");
+        }
+
+        // --- Step 2: Find the "EDIT" button, which is a sibling of the header ---
+        // We navigate to the header's parent, then find the button within that small scope.
+        const parentDiv = promptHeader.parentElement;
+        const editButton = parentDiv.querySelector('button');
+
+        if (!editButton || !editButton.textContent.includes('EDIT')) {
+            statusSpan.textContent = "Error: 'EDIT' button not found next to the prompt header.";
+            throw new Error("Could not find the 'EDIT' button next to the prompt header.");
+        }
+        console.log("✅ Found 'EDIT' button:", editButton);
+
+        // --- Step 3: Click the button and wait for the modal to appear ---
+        console.log("Clicking 'EDIT' button...");
+        editButton.click();
+
+        // The modal is a global element, so we can use a simpler selector here.
+        const modalContentSelector = 'section.mantine-Modal-content';
+        const modal = await waitForElement(modalContentSelector, 5000); // 5s timeout
+        console.log("✅ Successfully detected the prompt modal:", modal);
+
+    } catch (error) {
+        console.error("❌ Prompt fill test failed:", error);
+        alert(`Prompt fill test failed: ${error.message}`);
+    }
+}
+
+/**
  * Searches the DOM for the unique "Edit/Preview" tab bar and returns its main parent container.
  * This is the reliable anchor for finding newly uploaded content.
  * @returns {HTMLElement|null} The container element if found, otherwise null.
@@ -682,7 +747,7 @@ async function runUploadOrchestrator() {
             successSelector: 'video[class*="EdgeMedia_responsive"]'
         });
         videoContainerElement = videoResult.container;
-        console.log("✅ Video container element captured directly:", videoContainerElement);        
+        console.log("✅ Video container element captured directly:", videoContainerElement);
 
         // --- IMAGE LIFECYCLE (only if an image is provided) ---
         if (imageToUpload) {
@@ -699,6 +764,7 @@ async function runUploadOrchestrator() {
         statusSpan.style.color = 'white'; // Reset color on success
         statusSpan.textContent = '✅ All uploads complete! You can now fill out the form.';
         document.getElementById('ch-modal-post-btn').disabled = false;
+        testFillButton.style.display = 'inline-block';
 
     } catch (error) {
         console.error('Orchestrator failed:', error);
