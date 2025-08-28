@@ -10,6 +10,61 @@ let metadataModal = null;
 let videoContainerElement = null;
 let imageContainerElement = null;
 
+const SAMPLER_MAP = {
+    // ComfyUI Name -> Civitai Name
+
+    // --- Euler ---
+    'euler': 'Euler',
+    'euler_ancestral': 'Euler a',
+    'euler_cfg_pp': 'Euler',
+    'euler_ancestral_cfg_pp': 'Euler a',
+
+    // --- Heun ---
+    'heun': 'Heun',
+    // 'heunpp2' has no direct Civitai equivalent
+
+    // --- DPM (Diffusion Probabilistic Models) ---
+    'dpm_2': 'DPM2',
+    'dpm_2_ancestral': 'DPM2 a',
+    'lms': 'LMS',
+    'dpm_fast': 'DPM fast',
+    'dpm_adaptive': 'DPM adaptive',
+
+    // --- DPM++ ---
+    'dpmpp_2s_ancestral': 'DPM++ 2S a',
+    'dpmpp_sde': 'DPM++ SDE',
+    'dpmpp_2m': 'DPM++ 2M',
+    'dpmpp_2m_sde': 'DPM++ 2M SDE',
+    'dpmpp_3m_sde': 'DPM++ 3M SDE',
+    // GPU and other variants mapped to their base samplers
+    'dpmpp_sde_gpu': 'DPM++ SDE',
+    'dpmpp_2m_sde_gpu': 'DPM++ 2M SDE',
+    'dpmpp_3m_sde_gpu': 'DPM++ 3M SDE',
+    'dpmpp_2s_ancestral_cfg_pp': 'DPM++ 2S a',
+    'dpmpp_2m_cfg_pp': 'DPM++ 2M',
+
+    // --- Karras Variants (often available on Civitai) ---
+    'lms_karras': 'LMS Karras',
+    'dpm_2_karras': 'DPM2 Karras',
+    'dpm_2_ancestral_karras': 'DPM2 a Karras',
+    'dpmpp_2s_ancestral_karras': 'DPM++ 2S a Karras',
+    'dpmpp_2m_karras': 'DPM++ 2M Karras',
+    'dpmpp_sde_karras': 'DPM++ SDE Karras',
+    'dpmpp_2m_sde_karras': 'DPM++ 2M SDE Karras',
+    'dpmpp_3m_sde_karras': 'DPM++ 3M SDE Karras',
+
+    // --- Other Common Samplers ---
+    'ddim': 'DDIM',
+    'uni_pc': 'UniPC',
+    'uni_pc_bh2': 'UniPC', // map variant to base
+    'lcm': 'LCM',
+
+    // NOTE: Many custom/experimental samplers from the list have been intentionally omitted
+    // as they have no equivalent on Civitai (e.g., 'ipndm', 'deis', 'res_multistep', etc.)
+    // The script will safely skip these if they are encountered.
+};
+
+
 
 
 // --- UI CREATION ---
@@ -433,7 +488,7 @@ function handlePostButtonClick() {
     };
 
     console.log("✅ Metadata captured:", capturedData);
-    alert("Metadata saved. The script will use this data to fill the form once the 'Post' action is implemented.");
+    statusSpan.textContent = "Metadata saved. The script will use this data to fill the form once the 'Post' action is implemented.";
     hideModal();
     // TODO: In a future step, this will trigger the form-filling logic.
 }
@@ -441,6 +496,132 @@ function handlePostButtonClick() {
 
 
 // --- LOGIC ---
+
+/**
+ * Simulates typing a string into an element character by character,
+ * dispatching keyboard events for maximum compatibility with frameworks like React.
+ * @param {HTMLElement} element The input element to type into.
+ * @param {string} text The string to type.
+ */
+async function typeCharacterByCharacter(element, text) {
+    element.focus();
+    element.value = ''; // Clear the input first
+
+    for (const char of text) {
+        // Dispatch a 'keydown' event
+        element.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
+        // Update the value
+        element.value += char;
+        // Dispatch 'keyup' and 'input' events to trigger all listeners
+        element.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        // A tiny delay between characters makes it even more reliable
+        await new Promise(r => setTimeout(r, 250));
+    }
+}
+
+
+/**
+ * Waits for an element to appear and become interactive by checking its opacity.
+ * This is a minimal, robust function to handle animated elements.
+ * @param {string} selector The CSS selector for the element.
+ * @param {number} timeout The timeout in milliseconds.
+ * @returns {Promise<HTMLElement>} A promise that resolves with the interactive element.
+ */
+function waitForInteractiveElement(selector, timeout) {
+    return new Promise((resolve, reject) => {
+        const checkInterval = 100; // Check every 100ms
+        const timeoutId = setTimeout(() => {
+            clearInterval(intervalId);
+            reject(new Error(`Timeout: Interactive element "${selector}" did not appear within ${timeout}ms.`));
+        }, timeout);
+
+        const intervalId = setInterval(() => {
+            const element = document.querySelector(selector);
+            // Wait for the element to exist AND for its animation to complete (opacity is 1).
+            if (element && window.getComputedStyle(element).opacity === '1') {
+                clearInterval(intervalId);
+                clearTimeout(timeoutId);
+                resolve(element);
+            }
+        }, checkInterval);
+    });
+}
+
+/**
+ * Handles selecting a sampler by simulating keyboard navigation,
+ * which is more robust than trying to find and click the filtered option.
+ */
+async function selectSampler(modal, samplerName) {
+    if (!samplerName || samplerName.trim() === '') {
+        console.log("No sampler name provided, skipping sampler selection.");
+        return;
+    }
+
+    const samplerInput = modal.querySelector('#input_sampler');
+    if (!samplerInput) throw new Error("Could not find sampler input field.");
+
+    // Find the input's wrapper and look for the clear button ('X') inside it.
+    // This button only exists if there's a value.
+    const inputWrapper = samplerInput.closest('.mantine-Input-wrapper');
+    const clearButton = inputWrapper ? inputWrapper.querySelector('button[class*="CloseButton"]') : null;
+
+    if (clearButton) {
+        console.log("Found existing value. Clicking clear button to reset state...");
+        clearButton.click();
+        // Give React a moment to process the state change from the clear action.
+        await new Promise(r => setTimeout(r, 100));
+    }
+
+    // STEP 1: Click to open and focus.
+    console.log("Clicking sampler input to open the dropdown...");
+    samplerInput.click();
+
+    // STEP 2: Wait for the dropdown to be ready.
+    const dropdownSelector = 'div[aria-labelledby="input_sampler-label"]';
+    await waitForInteractiveElement(dropdownSelector, 5000);
+    console.log("✅ Sampler dropdown is interactive.");
+
+    // STEP 3: Type the search term to trigger the filter.
+    await typeCharacterByCharacter(samplerInput, samplerName);
+    console.log(`Finished typing "${samplerName}".`);
+
+    // A brief pause to ensure the filter has been fully applied.
+    await new Promise(r => setTimeout(r, 200));
+
+    // STEP 4: Simulate pressing the "Arrow Down" key to highlight the first (and only) result.
+    console.log("Simulating 'ArrowDown' key press...");
+    samplerInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', bubbles: true }));
+    await new Promise(r => setTimeout(r, 100));
+    samplerInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowDown', code: 'ArrowDown', bubbles: true }));
+    await new Promise(r => setTimeout(r, 100));
+
+    // STEP 5: Simulate pressing the "Enter" key to select the highlighted option.
+    console.log("Simulating 'Enter' key press...");
+    samplerInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+    await new Promise(r => setTimeout(r, 100));
+    samplerInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
+    await new Promise(r => setTimeout(r, 100));
+}
+
+/**
+ * Reliably sets the value of an input or textarea and dispatches an 'input' event
+ * to notify the website's framework of the change.
+ * @param {HTMLElement} element The input or textarea element.
+ * @param {string|number} value The value to set.
+ */
+function setInputValue(element, value) {
+    if (!element) {
+        console.warn("setInputValue called with a null element.");
+        return;
+    }
+    // 1. Set the value directly. This is the standard, safe way.
+    element.value = value;
+
+    // 2. Dispatch an 'input' event. This is the crucial part that
+    //    tells React, "Hey, the user just typed something!"
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+}
 
 /**
  * Finds and clicks the "EDIT" button for the video prompt and verifies the modal opens.
@@ -483,12 +664,102 @@ async function initiateVideoMetadataFill() {
 
         // The modal is a global element, so we can use a simpler selector here.
         const modalContentSelector = 'section.mantine-Modal-content';
-        const modal = await waitForElement(modalContentSelector, 5000); // 5s timeout
+        const modal = await waitForInteractiveElement(modalContentSelector, 5000);
         console.log("✅ Successfully detected the prompt modal:", modal);
+
+        try {
+            // 1. Get the data from our extension's UI
+            const data = {
+                prompt: document.getElementById('ch-video-prompt').value,
+                negativePrompt: document.getElementById('ch-video-neg-prompt').value,
+                cfg: document.getElementById('ch-video-guidance').value,
+                steps: document.getElementById('ch-video-steps').value,
+                sampler: document.getElementById('ch-video-sampler').value,
+                seed: document.getElementById('ch-video-seed').value
+            };
+            console.log("📝 Data to fill:", data);
+
+            // 2. Fill the "simple" fields
+            setInputValue(modal.querySelector('#input_prompt'), data.prompt);
+            setInputValue(modal.querySelector('#input_negativePrompt'), data.negativePrompt);
+            setInputValue(modal.querySelector('#input_cfgScale'), data.cfg);
+            setInputValue(modal.querySelector('#input_steps'), data.steps);
+            setInputValue(modal.querySelector('#input_seed'), data.seed);
+            console.log("✅ Simple fields filled.");
+
+            // 3. Fill the "difficult" sampler field
+            const comfySampler = data.sampler.trim().toLowerCase();
+            const civitaiSampler = SAMPLER_MAP[comfySampler]; // Look it up in our dictionary
+
+            if (civitaiSampler) {
+                console.log(`✅ Sampler mapped: "${comfySampler}" -> "${civitaiSampler}"`);
+            } else {
+                console.warn(`Unmapped sampler: "${comfySampler}". Skipping sampler selection.`);
+            }
+
+            const MAX_SAMPLER_ATTEMPTS = 2; // We will try a maximum of two times.
+            let samplerSetCorrectly = false;
+
+            for (let i = 1; i <= MAX_SAMPLER_ATTEMPTS; i++) {
+                console.log(`Attempt ${i}/${MAX_SAMPLER_ATTEMPTS} to set sampler to "${civitaiSampler}"`);
+
+                // Perform one attempt to set the sampler.
+                await selectSampler(modal, civitaiSampler);
+
+                // Give the component a moment to update its value in the DOM after 'Enter'.
+                await new Promise(r => setTimeout(r, 200));
+
+                // VERIFY THE RESULT
+                const samplerInput = modal.querySelector('#input_sampler');
+                const currentValue = samplerInput ? samplerInput.value : '';
+                console.log(`Verification: Input value is now "${currentValue}"`);
+
+                if (currentValue === civitaiSampler) {
+                    samplerSetCorrectly = true;
+                    console.log("✅ Sampler set correctly.");
+                    break; // Success! Exit the loop.
+                } else {
+                    console.warn(`Sampler was not set correctly on attempt ${i}. Expected "${civitaiSampler}", got "${currentValue}".`);
+                    if (i < MAX_SAMPLER_ATTEMPTS) {
+                        console.log("Retrying...");
+                    }
+                }
+            }
+
+            if (!samplerSetCorrectly) {
+                console.error(`Failed to set sampler correctly after ${MAX_SAMPLER_ATTEMPTS} attempts. Continuing anyway.`);
+                // We don't throw an error, we just accept the failure and move on.
+            }
+
+            // 4. Handle the "onBlur" quirk and Save
+            const saveButton = Array.from(modal.querySelectorAll('button')).find(b => b.textContent === 'Save');
+            if (!saveButton) throw new Error("Could not find the 'Save' button in the modal.");
+
+            // Click the modal title to ensure the last input field loses focus (triggers onBlur)
+            const modalTitle = modal.querySelector('.mantine-Modal-title');
+            if (modalTitle) modalTitle.click();
+            await new Promise(r => setTimeout(r, 100)); // Short delay for safety
+
+            console.log("Clicking 'Save' button...");
+            saveButton.click();
+
+            // 5. Verify the modal closes
+            await waitForElementToDisappear(modalContentSelector, 5000);
+            console.log("🎉 Metadata modal filled and closed successfully!");
+            statusSpan.textContent = "Success! Video metadata has been filled.";
+
+        } catch (error) {
+            console.error("❌ Failed during metadata fill process:", error);
+            statusSpan.textContent = `Failed to fill metadata: ${error.message}`;
+            // Optionally, try to close the modal on failure
+            //const closeButton = modal.querySelector('button.mantine-Modal-close');
+            //if (closeButton) closeButton.click();
+        }
+
 
     } catch (error) {
         console.error("❌ Prompt fill test failed:", error);
-        alert(`Prompt fill test failed: ${error.message}`);
+        statusSpan.textContent = `Prompt fill test failed: ${error.message}`;
     }
 }
 
@@ -841,7 +1112,6 @@ function triggerUpload(files) {
 
 function waitForElement(selector, timeout) {
     return new Promise((resolve, reject) => {
-        // If the element already exists, resolve immediately
         if (document.querySelector(selector)) return resolve();
 
         const timeoutId = setTimeout(() => {
@@ -850,10 +1120,11 @@ function waitForElement(selector, timeout) {
         }, timeout);
 
         const observer = new MutationObserver((mutations, obs) => {
-            if (document.querySelector(selector)) {
+            const foundElement = document.querySelector(selector);
+            if (foundElement) {
                 clearTimeout(timeoutId);
                 obs.disconnect();
-                resolve();
+                resolve(foundElement);
             }
         });
 
