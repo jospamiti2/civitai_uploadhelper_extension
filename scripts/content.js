@@ -158,6 +158,21 @@ Object.assign(testFillButton.style, {
 testFillButton.onclick = initiateVideoMetadataFill;
 banner.appendChild(testFillButton);
 
+const testResourceButton = document.createElement('button');
+testResourceButton.textContent = 'Test Resource Add';
+testResourceButton.style.display = 'none'; // Show on upload success
+Object.assign(testResourceButton.style, {
+    marginLeft: '15px',
+    padding: '5px 10px',
+    border: '1px solid #555',
+    borderRadius: '5px',
+    backgroundColor: '#8e44ad', 
+    color: 'white',
+    cursor: 'pointer'
+});
+testResourceButton.onclick = testAddResources; 
+banner.appendChild(testResourceButton);
+
 // New elements for status and error handling
 const statusSpan = document.createElement('span');
 statusSpan.style.marginLeft = '20px';
@@ -498,6 +513,227 @@ function handlePostButtonClick() {
 // --- LOGIC ---
 
 /**
+ * Checks if a resource with a specific name has been successfully added to the page.
+ * @param {string} resourceName The name of the resource to look for.
+ * @returns {boolean} True if the resource is found, false otherwise.
+ */
+function verifyResourceAdded(resourceName) {
+    if (!videoContainerElement) {
+        console.warn("Cannot verify resource, videoContainerElement is not set.");
+        return false;
+    }
+    // Find the 'Resources' heading to start our search
+    const resourceHeader = Array.from(videoContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Resources');
+    if (!resourceHeader) return false;
+
+    // Find all the links for added resources
+    const resourceLinks = resourceHeader.parentElement.parentElement.parentElement.querySelectorAll('a');
+    
+    // Check if any of them contain our resource name
+    const found = Array.from(resourceLinks).some(link => link.innerText.trim().startsWith(resourceName));
+    
+    return found;
+}
+
+
+/**
+ * Waits for a modal containing specific text to become hidden.
+ * @param {string} identifyingText The text that must be inside the modal.
+ * @param {number} timeout Timeout in milliseconds.
+ * @returns {Promise<void>}
+ */
+function waitForModalToDisappearByText(identifyingText, timeout) {
+    return new Promise((resolve, reject) => {
+        const checkInterval = 100;
+        const timeoutId = setTimeout(() => {
+            clearInterval(intervalId);
+            reject(new Error(`Timeout: Modal with text "${identifyingText}" did not disappear within ${timeout}ms.`));
+        }, timeout);
+
+        const intervalId = setInterval(() => {
+            const modals = document.querySelectorAll('section.mantine-Modal-content');
+            const targetModal = Array.from(modals).find(m => m.innerText.includes(identifyingText));
+
+            // If the modal doesn't exist OR it's hidden (display: none or opacity: 0), we're done.
+            if (!targetModal || window.getComputedStyle(targetModal).display === 'none' || window.getComputedStyle(targetModal).opacity === '0') {
+                clearInterval(intervalId);
+                clearTimeout(timeoutId);
+                resolve();
+            }
+        }, checkInterval);
+    });
+}
+
+
+/**
+ * Waits for a visible modal that contains a specific piece of text.
+ * @param {string} identifyingText The text to find inside the modal.
+ * @param {number} timeout The timeout in milliseconds.
+ * @returns {Promise<HTMLElement>} A promise resolving with the correct modal element.
+ */
+function waitForModalWithText(identifyingText, timeout) {
+    return new Promise((resolve, reject) => {
+        const checkInterval = 100; // Check every 100ms
+        const timeoutId = setTimeout(() => {
+            clearInterval(intervalId);
+            reject(new Error(`Timeout: Modal with text "${identifyingText}" did not appear within ${timeout}ms.`));
+        }, timeout);
+
+        const intervalId = setInterval(() => {
+            // Get all visible modals on the page
+            const visibleModals = Array.from(document.querySelectorAll('section.mantine-Modal-content'))
+                .filter(m => window.getComputedStyle(m).opacity === '1');
+
+            // Find the one that contains our specific text
+            for (const modal of visibleModals) {
+                if (modal.innerText.includes(identifyingText)) {
+                    clearInterval(intervalId);
+                    clearTimeout(timeoutId);
+                    resolve(modal);
+                    return;
+                }
+            }
+        }, checkInterval);
+    });
+}
+
+async function testAddResources() {
+    console.log("😡 Angry Helper is now adding resources...");
+
+    const lorasToAdd = [
+        { title: "Detail Tweaker XL", version: "v1.0" },
+    ];
+
+    for (const lora of lorasToAdd) {
+        let success = false;
+        const MAX_ATTEMPTS = 3; // Let's give it 3 shots
+
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            // First, check if it's somehow already there
+            if (verifyResourceAdded(lora.title)) {
+                console.log(`Resource "${lora.title}" is already present.`);
+                success = true;
+                break;
+            }
+
+            console.log(`Attempt ${attempt}/${MAX_ATTEMPTS} to add resource "${lora.title}"`);
+            try {
+                // Perform one full attempt to add the resource
+                await addSingleResource(lora.title, lora.version);
+                
+                // Give the DOM a moment to update after the modal closes
+                await new Promise(r => setTimeout(r, 500)); 
+
+                // VERIFY! DID IT WORK?!
+                if (verifyResourceAdded(lora.title)) {
+                    success = true;
+                    console.log(`✅ VERIFIED: "${lora.title}" was successfully added.`);
+                    break; // It worked! Exit the retry loop.
+                } else {
+                    console.warn(`❌ VERIFICATION FAILED on attempt ${attempt}. Resource not found on page. Did the website lie to us?!`);
+                }
+
+            } catch (error) {
+                console.error(`❌ Attempt ${attempt} failed with an error:`, error.message);
+                // We should also try to close any leftover modals here in case of a crash
+                const leftoverModal = document.querySelector('section.mantine-Modal-content');
+                if (leftoverModal) {
+                    const closeButton = leftoverModal.querySelector('button[class*="CloseButton"]');
+                    if (closeButton) {
+                        console.log("Closing leftover modal after error...");
+                        closeButton.click();
+                        await new Promise(r => setTimeout(r, 500));
+                    }
+                }
+            }
+
+            if (attempt < MAX_ATTEMPTS) {
+                console.log("...GETTING ANGRIER... TRYING AGAIN!");
+            }
+        }
+
+        if (!success) {
+            alert(`The Angry Helper failed to add "${lora.title}" after ${MAX_ATTEMPTS} attempts. The website is too broken today.`);
+            return; // Stop processing further LoRAs if one fails completely
+        }
+    }
+
+    if (lorasToAdd.length > 0) {
+        alert("The Angry Helper has successfully beaten all resources into submission!");
+    }
+}
+
+
+/**
+ * Automates the entire UI flow for adding a single resource by name.
+ * @param {string} resourceName The name to search for (e.g., "Detail Tweaker XL").
+ * @param {string} resourceVersion The version to select (currently unused, for future).
+ */
+async function addSingleResource(resourceName, resourceVersion) {
+    if (!videoContainerElement) throw new Error("Video container element not found.");
+
+    // 1. Find and click the "ADD RESOURCE" button
+    console.log(`Finding 'ADD RESOURCE' button...`);
+    const allH3s = Array.from(videoContainerElement.querySelectorAll('h3'));
+    const resourceHeader = allH3s.find(h => h.textContent.trim() === 'Resources');
+    if (!resourceHeader) throw new Error("Could not find the 'Resources' heading.");
+    // Navigate up two parent elements to find the correct container
+    const resourceContainer = resourceHeader.parentElement.parentElement;
+    if (!resourceContainer) throw new Error("Could not find the parent container for resources.");
+
+    // Now, find the 'RESOURCE' button within that correct container
+    const allButtons = Array.from(resourceContainer.querySelectorAll('button'));
+    const addResourceButton = allButtons.find(b => b.innerText.trim() === 'RESOURCE');
+        addResourceButton.click();
+
+    // 2. Wait for the resource selection modal to appear and be ready
+    console.log("Waiting for resource modal...");
+    const resourceModal = await waitForModalWithText("Select resource(s)", 5000);
+    console.log("✅ Resource modal is open and interactive.");
+
+    // 3. Find the search input and type the resource name
+    const searchInput = resourceModal.querySelector('input[placeholder="Search..."]');
+    if (!searchInput) throw new Error("Could not find the resource search input.");
+    await typeCharacterByCharacter(searchInput, resourceName);
+    console.log(`Typed "${resourceName}" into search.`);
+
+    // 4. Wait for search results to appear. We'll look for the grid container.
+    // A small delay helps ensure the search is triggered before we look for results.
+    await new Promise(r => setTimeout(r, 1000)); // Wait 1s for search results
+    const resultsGrid = await waitForInteractiveElement('div[class*="SearchLayout_grid"]', 10000);
+    console.log("✅ Search results grid is visible.");
+
+    // 5. Find the correct card and its "Select" button
+    const cards = resultsGrid.querySelectorAll('div[class*="Cards_root"]');
+    let targetCard = null;
+
+    for (const card of cards) {
+        // Find the specific paragraph element that is the title.
+        const titleElement = card.querySelector('p[data-line-clamp="true"]');
+        
+        // Check if we found the title and if its text matches.
+        if (titleElement && titleElement.textContent.trim().startsWith(resourceName)) {
+            targetCard = card;
+            break; 
+        }
+    }
+    if (!targetCard) throw new Error(`Could not find a card with the exact title "${resourceName}".`);
+    console.log(`Found card for "${resourceName}".`);
+    
+    const selectButton = Array.from(targetCard.querySelectorAll('button')).find(b => b.textContent === 'Select');
+    if (!selectButton) throw new Error("Could not find 'Select' button on the resource card.");
+
+    // 6. Click "Select" and then close the modal
+    console.log("Clicking 'Select' button...");
+    selectButton.click();
+    
+    // The modal closes itself on selection. We just need to wait for it.
+    await waitForModalToDisappearByText("Select resource(s)", 5000);
+    console.log("✅ Resource modal has closed.");
+}
+
+
+/**
  * Simulates typing a string into an element character by character,
  * dispatching keyboard events for maximum compatibility with frameworks like React.
  * @param {HTMLElement} element The input element to type into.
@@ -516,7 +752,7 @@ async function typeCharacterByCharacter(element, text) {
         element.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
         element.dispatchEvent(new Event('input', { bubbles: true }));
         // A tiny delay between characters makes it even more reliable
-        await new Promise(r => setTimeout(r, 250));
+        await new Promise(r => setTimeout(r, 50));
     }
 }
 
@@ -1036,6 +1272,7 @@ async function runUploadOrchestrator() {
         statusSpan.textContent = '✅ All uploads complete! You can now fill out the form.';
         document.getElementById('ch-modal-post-btn').disabled = false;
         testFillButton.style.display = 'inline-block';
+        testResourceButton.style.display = 'inline-block';
 
     } catch (error) {
         console.error('Orchestrator failed:', error);
