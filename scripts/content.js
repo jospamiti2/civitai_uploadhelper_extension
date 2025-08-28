@@ -64,6 +64,14 @@ const SAMPLER_MAP = {
     // The script will safely skip these if they are encountered.
 };
 
+const ALL_CIVITAI_TOOLS = [
+    // Image Tools
+    "Civitai", "Rubbrband", "Purplesmart", "ComfyUI", "A1111", "Adobe Firefly", "AniFusion", "Artflow", "Canva", "Craiyon", "Cuebric", "DALL-E 3", "Davant", "DaVinci", "Deep Dream Generator", "Diffus", "Draw Things", "Dream", "DreamStudio", "FaceFusion", "Flush", "Flux", "Fooocus", "Forge", "Gemini", "Getty Images Generative AI", "Google ImageFX", "GPT Image 1", "Hugging Face", "Ideogram", "Invoke", "Kittl AI", "Kolors", "KREA", "Krita", "Lasco.ai ", "Maze", "Meta AI", "Midjourney", "ModelsLab", "Nijijourney", "OpenArt", "Photopea", "PicSo", "PixaBay", "Recraft", "Rendermind", "Salt", "Scenario", "SD.Next", "Shutterstock AI Image Generation", "SwarmUI", "Touch Designer", "Wowzer", "Yodayo",
+    // Video Tools
+    "Kling", "Higgsfield", "MiniMax / Hailuo", "Hedra", "neural frames", "Tripo 3D", "LTX Studio", "Haiper", "Mochi", "CogVideoX", "SAGA", "Domo AI", "Morph Studio", "Banodoco", "AnimateDiff", "DeepMake", "Deforum Studio", "EBSynth", "Fable", "FramePack", "Genmo", "Gooey AI", "HunYuan", "iKHOR Labs", "Invideo", "Kaiber", "LensGo", "Lightricks LTXV", "Luma Dream Machine", "Luma Genie", "Magic Animate", "Nim", "Parseq", "Pika", "Pixverse", "Prism", "Runway", "SadTalker", "Showrunner AI", "Silmu", "Sora", "Stable Artisan", "Veo", "VidProc", "Vidu", "Vimeo", "Wan Video", "Warp Video",
+    // Other Categories
+    "Lambda Labs", "Nebius", "RunPod", "ThinkDiffusion", "Salad", "fal", "Brev", "RunDiffusion", "MAGNIFIC", "Topaz Photo AI", "Topaz Video AI", "Adobe AfterEffects", "Adobe Photoshop", "Adobe Premiere", "CapCut", "ChatGPT", "DaVinci Resolve", "Final Cut Pro", "Flimora ", "GIMP", "Hitfilm", "Magix Video", "Picsart", "Veed.io", "VSDC", "Wondershare ", "Blender", "Unity", "Unreal Engine", "Grok", "Live Portrait", "MimicMotion"
+];
 
 
 
@@ -246,6 +254,51 @@ async function populateModalWithData(data) {
             filenameInput.style.color = 'black';
         }
     };
+
+    // --- Pre-fill and Display Video Tools ---
+    const selectedToolsContainer = document.getElementById('ch-selected-video-tools');
+    const allToolsContainer = document.getElementById('ch-all-video-tools');
+    
+    // Ensure containers exist before proceeding
+    if (!selectedToolsContainer || !allToolsContainer) {
+        console.error("Tool containers not found in the modal.");
+        return;
+    }
+    
+    selectedToolsContainer.innerHTML = ''; // Clear any previous summary
+
+    // Step 1: Determine the set of pre-selected tools
+    const preselectedTools = new Set();
+    if (data) {
+        preselectedTools.add("ComfyUI");
+    }
+    if (data && data.resources?.base_model && data.resources.base_model.toLowerCase().includes('wan')) {
+        preselectedTools.add("Wan Video");
+    }
+    console.log("Pre-selected tools:", preselectedTools);
+
+    // Step 2: Update the main list of all checkboxes
+    const allCheckboxes = allToolsContainer.querySelectorAll('input[type="checkbox"]');
+    allCheckboxes.forEach(cb => {
+        // Check the box if its name is in our pre-selected set
+        cb.checked = preselectedTools.has(cb.dataset.toolName);
+    });
+
+    // Step 3: Create and display the summary view of only the selected tools
+    preselectedTools.forEach(toolName => {
+        const checkboxElement = createToolCheckbox(toolName, 'video-summary'); // Use a different prefix for summary
+        checkboxElement.querySelector('input').checked = true;
+        // When a summary checkbox is clicked, it un-checks the master list and removes itself
+        checkboxElement.addEventListener('change', (e) => {
+            const masterCheckbox = allToolsContainer.querySelector(`input[data-tool-name="${toolName}"]`);
+            if (masterCheckbox) {
+                masterCheckbox.checked = e.target.checked;
+            }
+            e.currentTarget.remove(); // Remove from the summary view
+        });
+        selectedToolsContainer.appendChild(checkboxElement);
+    });
+
 }
 function clearModalFields() {
     const idsToClear = [
@@ -346,6 +399,67 @@ function createMetadataModal() {
     addResourceButton.style.backgroundColor = '#5f6a78';
     addResourceButton.style.color = 'white';
     addResourceButton.style.cursor = 'pointer';
+
+
+    // --- Tools Section ---
+    const toolsSection = document.createElement('div');
+    toolsSection.id = 'ch-video-tools-section'; 
+    toolsSection.innerHTML = '<h3 style="margin-top: 20px; border-top: 1px solid #555; padding-top: 15px;">Video Tools</h3>';
+
+    // Container for the pre-selected tools summary
+    const selectedToolsContainer = document.createElement('div');
+    selectedToolsContainer.id = 'ch-selected-video-tools';
+    Object.assign(selectedToolsContainer.style, {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '10px',
+        marginBottom: '10px'
+    });
+    toolsSection.appendChild(selectedToolsContainer);
+
+    // "Show All Tools" button
+    const showAllToolsBtn = document.createElement('button');
+    showAllToolsBtn.textContent = 'Show All Tools ▼';
+    Object.assign(showAllToolsBtn.style, {
+        padding: '5px 10px',
+        cursor: 'pointer',
+        border: '1px solid #777',
+        borderRadius: '4px',
+        backgroundColor: '#5f6a78',
+        color: 'white'
+    });
+    toolsSection.appendChild(showAllToolsBtn);
+
+    // Container for the comprehensive list of all tools (initially hidden)
+    const allToolsContainer = document.createElement('div');
+    allToolsContainer.id = 'ch-all-video-tools'; 
+    Object.assign(allToolsContainer.style, {
+        display: 'none', 
+        marginTop: '15px',
+        flexWrap: 'wrap',
+        gap: '10px 15px',
+        maxHeight: '200px',
+        overflowY: 'auto',
+        border: '1px solid #555',
+        padding: '10px',
+        borderRadius: '5px'
+    });
+    
+    // Populate the comprehensive list with checkboxes
+    ALL_CIVITAI_TOOLS.forEach(toolName => {
+        allToolsContainer.appendChild(createToolCheckbox(toolName, 'video'));
+    });
+    toolsSection.appendChild(allToolsContainer);
+
+    // Event listener to toggle the full list
+    showAllToolsBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const isHidden = allToolsContainer.style.display === 'none';
+        allToolsContainer.style.display = isHidden ? 'flex' : 'none';
+        showAllToolsBtn.textContent = isHidden ? 'Hide All Tools ▲' : 'Show All Tools ▼';
+    });
+
+    modalContainer.appendChild(toolsSection);
 
     const imageSection = document.createElement('div');
     imageSection.id = 'ch-image-section';
@@ -505,6 +619,16 @@ async function handleStartButtonClick() {
             console.log("No LoRAs to add.");
         }
 
+        // --- Part 3: Add Tools ---
+        const videoTools = getVideoToolDataFromModal();
+        if (videoTools.length > 0) {
+            updateStatus(`⏳ Adding ${videoTools.length} tools...`);
+            await addToolsFromList(videoTools);
+            console.log("✅ All tools added.");
+        } else {
+            console.log("No tools to add.");
+        }        
+
         updateStatus("✅ All tasks complete!");
         updateStatus("Angry Helper has finished all automated tasks!");
         // We can hide our own modal now, or leave it.
@@ -520,7 +644,198 @@ async function handleStartButtonClick() {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // --- LOGIC ---
+
+/**
+ * Simulates a realistic mouse click on an element by dispatching
+ * mousedown, mouseup, and click events.
+ * @param {HTMLElement} element The element to click.
+ */
+function simulateMouseClick(element) {
+    if (!element) {
+        console.warn("simulateMouseClick called with a null element.");
+        return;
+    }
+    const mouseEventInit = {
+        bubbles: true,
+        cancelable: true,
+        view: window
+    };
+    element.dispatchEvent(new MouseEvent('mousedown', mouseEventInit));
+    element.dispatchEvent(new MouseEvent('mouseup', mouseEventInit));
+    element.dispatchEvent(new MouseEvent('click', mouseEventInit));
+}
+
+/**
+ * Reads the final list of selected video tools from the checkbox UI.
+ * @returns {string[]} An array of selected tool names.
+ */
+function getVideoToolDataFromModal() {
+    const tools = [];
+    // The master list of all checkboxes is the single source of truth.
+    const container = document.getElementById('ch-all-video-tools');
+    
+    if (container) {
+        // Find all checkboxes that are currently checked.
+        const checkedBoxes = container.querySelectorAll('input[type="checkbox"]:checked');
+        
+        // Extract the tool name from the 'data-tool-name' attribute of each checked box.
+        checkedBoxes.forEach(cb => {
+            tools.push(cb.dataset.toolName);
+        });
+    } else {
+        console.error("Could not find the video tools container ('ch-all-video-tools') to read data from.");
+    }
+    
+    console.log("Gathered selected video tools for processing:", tools);
+    return tools;
+}
+
+/**
+ * Creates a styled checkbox element for a tool.
+ * @param {string} toolName The name of the tool.
+ * @param {string} prefix A prefix for the ID to ensure uniqueness (e.g., 'video' or 'image').
+ * @returns {HTMLElement} The container div for the checkbox and its label.
+ */
+function createToolCheckbox(toolName, prefix) {
+    const container = document.createElement('div');
+    // Sanitize the tool name to create a valid ID
+    const safeIdName = toolName.replace(/[^a-zA-Z0-9]/g, '');
+    
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.id = `ch-tool-${prefix}-${safeIdName}`;
+    checkbox.value = toolName;
+    checkbox.dataset.toolName = toolName; // Store original name for easy access
+
+    const label = document.createElement('label');
+    label.htmlFor = checkbox.id;
+    label.textContent = toolName;
+    Object.assign(label.style, {
+        marginLeft: '5px',
+        cursor: 'pointer'
+    });
+
+    container.appendChild(checkbox);
+    container.appendChild(label);
+    return container;
+}
+
+/**
+ * Main orchestrator for adding a list of tools, with the "N-click" bug workaround.
+ * @param {string[]} toolList A list of tool names to add.
+ */
+async function addToolsFromList(toolList) {
+    if (!videoContainerElement) throw new Error("Video container element not found.");
+    if (toolList.length === 0) return;
+    
+    // 1. Find the "TOOL" button specifically in the "Tools" section. No variables.
+    console.log("Finding 'TOOL' button...");
+    const toolHeader = Array.from(videoContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Tools');
+    if (!toolHeader) throw new Error("Could not find the 'Tools' heading.");
+
+    const addButtonContainer = toolHeader.parentElement.nextElementSibling;
+    if (!addButtonContainer) throw new Error("Could not find the container for the 'TOOL' button.");
+    const addToolButton = Array.from(addButtonContainer.querySelectorAll('button')).find(b => b.innerText.trim() === 'TOOL');
+    if (!addToolButton) throw new Error("Could not find the 'TOOL' button.");
+    
+    addToolButton.click();
+    console.log("✅ Clicked 'TOOL' button.");
+
+    // 2. Wait for the popover to appear. It's in a portal.
+    const popoverSelector = 'div[id^="headlessui-popover-panel-"]';
+    const popover = await waitForInteractiveElement(popoverSelector, 5000);
+    console.log("✅ Tools popover is visible.");
+
+    // 3. Loop through the tools and click each one
+    let selectedCount = 0;
+
+    // 3. Loop through the tools and click the checkbox for each one.
+    for (const toolName of toolList) {
+        console.log(`Searching for tool: "${toolName}"`);
+        const allOptions = popover.querySelectorAll('div[role="option"]');
+        const targetOption = Array.from(allOptions).find(opt => opt.querySelector('span')?.textContent.trim() === toolName);
+
+        if (targetOption) {
+            // Find the specific checkbox inside the row we found.
+            const checkboxInput = targetOption.querySelector('input[type="checkbox"]');
+            
+            if (checkboxInput) {
+                console.log(`Found "${toolName}". Clicking internal checkbox.`);
+                simulateMouseClick(checkboxInput); 
+                selectedCount++; 
+                await new Promise(r => setTimeout(r, 200));
+            } else {
+                 console.warn(`Internal error: Checkbox input not found for ${toolName}.`);
+            }
+        } else {
+            console.warn(`Could not find tool "${toolName}" in the list. Skipping.`);
+        }
+    }
+
+    if (selectedCount === 0) {
+        console.log("No tools were selected, closing popover.");
+        addToolButton.click(); // Toggle to close
+        await waitForElementToDisappear(popoverSelector, 3000);
+        return;
+    }
+
+    // 4. Find the "Add" button and click it N times
+    const saveButton = Array.from(popover.querySelectorAll('button')).find(b => b.textContent.trim() === 'Add');
+    if (!saveButton) throw new Error("Could not find the 'Add' button in the tools popover.");
+
+    console.log(`😡 Found the 'Add' button. Clicking it ${selectedCount} times to beat the bug...`);
+    for (let i = 0; i < selectedCount; i++) {
+        saveButton.click();
+        await new Promise(r => setTimeout(r, 100)); // A tiny pause between rage-clicks
+    }
+
+    // 5. Wait for the popover to disappear
+    await waitForElementToDisappear(popoverSelector, 3000);
+    console.log("✅ Tools popover has been submitted and closed.");
+
+    // 6. Verification
+    console.log("Verifying that tools were added...");
+    await new Promise(r => setTimeout(r, 500)); 
+
+    // This is the container for the whole "Tools" section
+    const toolsSectionContainer = toolHeader.parentElement.parentElement.parentElement;
+
+    for (const toolName of toolList) {
+        // Find all the spans inside list items within the Tools section
+        const addedToolSpans = toolsSectionContainer.querySelectorAll('ul > li span');
+        const isPresent = Array.from(addedToolSpans).some(span => span.textContent.trim() === toolName);
+
+        if (!isPresent) {
+            throw new Error(`VERIFICATION FAILED: Tool "${toolName}" was not found after adding!`);
+        } else {
+            console.log(`✅ VERIFIED: "${toolName}" is present.`);
+        }
+    }
+}
 
 /**
  * Updates the status message in both the bottom banner and the modal simultaneously.
