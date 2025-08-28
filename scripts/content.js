@@ -81,6 +81,7 @@ banner.style.alignItems = 'center';
 banner.style.zIndex = '9999';
 banner.style.fontFamily = 'sans-serif';
 banner.style.fontSize = '16px';
+banner.style.boxShadow = '0 -2px 5px rgba(0,0,0,0.3)';
 document.body.append(banner);
 
 // --- Banner Content ---
@@ -143,37 +144,36 @@ Object.assign(retryBannerButton.style, {
 retryBannerButton.onclick = runUploadOrchestrator;
 banner.appendChild(retryBannerButton);
 
-const testFillButton = document.createElement('button');
-testFillButton.textContent = 'Test Prompt Fill';
-testFillButton.style.display = 'none';
-Object.assign(testFillButton.style, {
-    marginLeft: '15px',
-    padding: '5px 10px',
-    border: '1px solid #555',
-    borderRadius: '5px',
-    backgroundColor: '#16a085',
-    color: 'white',
-    cursor: 'pointer'
-});
-testFillButton.onclick = initiateVideoMetadataFill;
-banner.appendChild(testFillButton);
+// const testFillButton = document.createElement('button');
+// testFillButton.textContent = 'Test Prompt Fill';
+// testFillButton.style.display = 'none';
+// Object.assign(testFillButton.style, {
+//     marginLeft: '15px',
+//     padding: '5px 10px',
+//     border: '1px solid #555',
+//     borderRadius: '5px',
+//     backgroundColor: '#16a085',
+//     color: 'white',
+//     cursor: 'pointer'
+// });
+// testFillButton.onclick = initiateVideoMetadataFill;
+// banner.appendChild(testFillButton);
 
-const testResourceButton = document.createElement('button');
-testResourceButton.textContent = 'Test Resource Add';
-testResourceButton.style.display = 'none'; // Show on upload success
-Object.assign(testResourceButton.style, {
-    marginLeft: '15px',
-    padding: '5px 10px',
-    border: '1px solid #555',
-    borderRadius: '5px',
-    backgroundColor: '#8e44ad', 
-    color: 'white',
-    cursor: 'pointer'
-});
-testResourceButton.onclick = testAddResources; 
-banner.appendChild(testResourceButton);
+// const testResourceButton = document.createElement('button');
+// testResourceButton.textContent = 'Test Resource Add';
+// testResourceButton.style.display = 'none'; // Show on upload success
+// Object.assign(testResourceButton.style, {
+//     marginLeft: '15px',
+//     padding: '5px 10px',
+//     border: '1px solid #555',
+//     borderRadius: '5px',
+//     backgroundColor: '#8e44ad', 
+//     color: 'white',
+//     cursor: 'pointer'
+// });
+// testResourceButton.onclick = testAddResources; 
+// banner.appendChild(testResourceButton);
 
-// New elements for status and error handling
 const statusSpan = document.createElement('span');
 statusSpan.style.marginLeft = '20px';
 banner.appendChild(statusSpan);
@@ -291,13 +291,13 @@ function createMetadataModal() {
     modalOverlay.id = 'ch-modal-overlay';
     Object.assign(modalOverlay.style, {
         position: 'fixed', top: '0', left: '0', width: '100%', height: '100%',
-        backgroundColor: 'rgba(0, 0, 0, 0.7)', display: 'none', justifyContent: 'center',
+        backgroundColor: 'rgba(0, 0, 0, 0.5)', display: 'none', justifyContent: 'center',
         alignItems: 'center', zIndex: '10000'
     });
 
     const modalContainer = document.createElement('div');
     Object.assign(modalContainer.style, {
-        backgroundColor: '#34495e', padding: '20px', borderRadius: '8px',
+        backgroundColor: '#34495e88', padding: '20px', borderRadius: '8px',
         width: '900px', maxHeight: '90vh', overflowY: 'auto', color: 'white'
     });
     modalOverlay.appendChild(modalContainer);
@@ -336,7 +336,7 @@ function createMetadataModal() {
     // Controls for adding new resources
     const addResourceButton = document.createElement('button');
     addResourceButton.id = 'ch-add-resource-btn';
-    addResourceButton.textContent = 'Add Manual Resource';
+    addResourceButton.textContent = 'Add more loras';
     addResourceButton.style.marginTop = '10px';
     resourcesSection.appendChild(addResourceButton);
     modalContainer.appendChild(resourcesSection);
@@ -380,7 +380,7 @@ function createMetadataModal() {
 
     const postButton = document.createElement('button');
     postButton.id = 'ch-modal-post-btn';
-    postButton.textContent = 'Save & Post Later';
+    postButton.textContent = 'Start Automation';
     Object.assign(postButton.style, {
         padding: '10px 20px', fontSize: '16px', backgroundColor: '#27ae60',
         color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'
@@ -430,7 +430,7 @@ function createMetadataModal() {
     metadataModal = modalOverlay;
 
     // --- Event Listeners ---
-    postButton.addEventListener('click', handlePostButtonClick);
+    postButton.addEventListener('click', handleStartButtonClick);
     modalOverlay.addEventListener('click', (e) => {
         if (e.target === modalOverlay) hideModal();
     });
@@ -483,34 +483,89 @@ function hideModal() {
 window.hideModal = hideModal;
 
 
-function handlePostButtonClick() {
-    const capturedData = {
-        videoPrompt: document.getElementById('ch-video-prompt').value,
-        videoNegativePrompt: document.getElementById('ch-video-neg-prompt').value,
-        videoGuidance: document.getElementById('ch-video-guidance').value,
-        videoSteps: document.getElementById('ch-video-steps').value,
-        videoSampler: document.getElementById('ch-video-sampler').value,
-        videoSeed: document.getElementById('ch-video-seed').value,
-        videoResources: document.getElementById('ch-video-resources').value,
-        videoTools: document.getElementById('ch-video-tools').value,
-        videoTechniques: document.getElementById('ch-video-techniques').value,
+async function handleStartButtonClick() {
+    const postButton = document.getElementById('ch-modal-post-btn');
+    const modalStatus = document.getElementById('ch-modal-status');
+    postButton.disabled = true;
 
-        imageResources: document.getElementById('ch-image-resources').value,
-        imageTools: document.getElementById('ch-image-tools').value,
-        imageTechniques: document.getElementById('ch-image-techniques').value,
+    try {
+        hideModal();
+        // --- Part 1: Fill the metadata (prompts, sampler, etc.) ---
+        updateStatus("⏳ Filling metadata...");
+        await initiateVideoMetadataFill();
+        console.log("✅ Metadata filled.");
 
-        commonOffset: document.getElementById('ch-common-offset').value
-    };
+        // --- Part 2: Get the LoRA list and add them ---
+        const loras = getLoraDataFromModal();
+        if (loras.length > 0) {
+            updateStatus(`Adding ${loras.length} resources...`);
+            await addResourcesFromList(loras);
+            updateStatus("✅ All resources added.");
+        } else {
+            console.log("No LoRAs to add.");
+        }
 
-    console.log("✅ Metadata captured:", capturedData);
-    statusSpan.textContent = "Metadata saved. The script will use this data to fill the form once the 'Post' action is implemented.";
-    hideModal();
-    // TODO: In a future step, this will trigger the form-filling logic.
+        updateStatus("✅ All tasks complete!");
+        updateStatus("Angry Helper has finished all automated tasks!");
+        // We can hide our own modal now, or leave it.
+        // hideModal();
+
+    } catch (error) {
+        updateStatus(`❌ Error: ${error.message}`, true);
+        alert(`An error occurred: ${error.message}`);
+    } finally {
+        postButton.disabled = false;
+    }
 }
 
 
 
 // --- LOGIC ---
+
+/**
+ * Updates the status message in both the bottom banner and the modal simultaneously.
+ * @param {string} message The message to display.
+ * @param {boolean} isError If true, displays the message in an error color.
+ */
+function updateStatus(message, isError = false) {
+    const bannerStatus = statusSpan; // The global one in the banner
+    const modalStatus = document.getElementById('ch-modal-status');
+
+    if (bannerStatus) {
+        bannerStatus.textContent = message;
+        bannerStatus.style.color = isError ? '#ffcccc' : 'white';
+    }
+    if (modalStatus) {
+        modalStatus.textContent = message;
+        modalStatus.style.color = isError ? '#ffcccc' : '#ecf0f1';
+    }
+    console.log(`STATUS: ${message}`);
+}
+
+// --- NEW ---
+/**
+ * Reads all LoRA data (recognized and unrecognized) from our extension's modal.
+ * @returns {Array<{title: string, version: string}>}
+ */
+function getLoraDataFromModal() {
+    const loras = [];
+    const rows = document.querySelectorAll('#ch-recognized-loras .lora-item, #ch-unrecognized-loras .lora-item');
+    
+    rows.forEach(row => {
+        const titleInput = row.querySelector('.title');
+        const versionInput = row.querySelector('.version');
+        
+        // Only add loras that have a title to search for
+        if (titleInput && versionInput && titleInput.value.trim() !== '') {
+            loras.push({
+                title: titleInput.value.trim(),
+                version: versionInput.value.trim()
+            });
+        }
+    });
+    console.log("Found LoRAs to add from modal:", loras);
+    return loras;
+}
 
 /**
  * Checks if a resource with a specific name has been successfully added to the page.
@@ -597,72 +652,56 @@ function waitForModalWithText(identifyingText, timeout) {
     });
 }
 
-async function testAddResources() {
-    console.log("😡 Angry Helper is now adding resources...");
+/**
+ * The new master orchestrator for adding a list of resources.
+ * Contains the "Angry Helper" retry logic.
+ * @param {Array<{title: string, version: string}>} loraList
+ */
+async function addResourcesFromList(loraList) {
+    console.log(`😡 Angry Helper starting to add ${loraList.length} resources...`);
 
-    const lorasToAdd = [
-        { title: "Detail Tweaker XL", version: "v1.0" },
-    ];
-
-    for (const lora of lorasToAdd) {
+    for (const lora of loraList) {
         let success = false;
-        const MAX_ATTEMPTS = 3; // Let's give it 3 shots
+        const MAX_ATTEMPTS = 3;
 
         for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            // First, check if it's somehow already there
-            if (verifyResourceAdded(lora.title)) {
-                console.log(`Resource "${lora.title}" is already present.`);
+            // Check if it's already on the page before we start
+            const resourceLinks = videoContainerElement.querySelectorAll('a');
+            const alreadyExists = Array.from(resourceLinks).some(link => link.innerText.includes(lora.title));
+            if (alreadyExists) {
+                console.log(`Resource "${lora.title}" is already present. Skipping.`);
                 success = true;
                 break;
             }
 
             console.log(`Attempt ${attempt}/${MAX_ATTEMPTS} to add resource "${lora.title}"`);
             try {
-                // Perform one full attempt to add the resource
                 await addSingleResource(lora.title, lora.version);
-                
-                // Give the DOM a moment to update after the modal closes
-                await new Promise(r => setTimeout(r, 500)); 
+                await waitForResourceAdded(lora.title, 5000);
 
-                // VERIFY! DID IT WORK?!
-                if (verifyResourceAdded(lora.title)) {
-                    success = true;
-                    console.log(`✅ VERIFIED: "${lora.title}" was successfully added.`);
-                    break; // It worked! Exit the retry loop.
-                } else {
-                    console.warn(`❌ VERIFICATION FAILED on attempt ${attempt}. Resource not found on page. Did the website lie to us?!`);
-                }
-
+                success = true;
+                console.log(`✅ VERIFIED: "${lora.title}" was successfully added.`);
+                break;
             } catch (error) {
-                console.error(`❌ Attempt ${attempt} failed with an error:`, error.message);
-                // We should also try to close any leftover modals here in case of a crash
+                console.error(`❌ Attempt ${attempt} to add "${lora.title}" failed:`, error.message);
                 const leftoverModal = document.querySelector('section.mantine-Modal-content');
                 if (leftoverModal) {
                     const closeButton = leftoverModal.querySelector('button[class*="CloseButton"]');
                     if (closeButton) {
-                        console.log("Closing leftover modal after error...");
+                        console.log("Closing leftover modal...");
                         closeButton.click();
                         await new Promise(r => setTimeout(r, 500));
                     }
                 }
             }
-
-            if (attempt < MAX_ATTEMPTS) {
-                console.log("...GETTING ANGRIER... TRYING AGAIN!");
-            }
+            if (attempt < MAX_ATTEMPTS) console.log("TRYING AGAIN!");
         }
 
         if (!success) {
-            alert(`The Angry Helper failed to add "${lora.title}" after ${MAX_ATTEMPTS} attempts. The website is too broken today.`);
-            return; // Stop processing further LoRAs if one fails completely
+            throw new Error(`Failed to add "${lora.title}" after ${MAX_ATTEMPTS} attempts.`);
         }
     }
-
-    if (lorasToAdd.length > 0) {
-        alert("The Angry Helper has successfully beaten all resources into submission!");
-    }
 }
-
 
 /**
  * Automates the entire UI flow for adding a single resource by name.
@@ -1269,16 +1308,17 @@ async function runUploadOrchestrator() {
         }
 
         statusSpan.style.color = 'white'; // Reset color on success
-        statusSpan.textContent = '✅ All uploads complete! You can now fill out the form.';
+        updateStatus('✅ All uploads complete! You can now fill out the form.');
         document.getElementById('ch-modal-post-btn').disabled = false;
-        testFillButton.style.display = 'inline-block';
-        testResourceButton.style.display = 'inline-block';
+        //testFillButton.style.display = 'inline-block';
+        //testResourceButton.style.display = 'inline-block';
 
     } catch (error) {
         console.error('Orchestrator failed:', error);
         openDetailsButton.style.display = 'none';
         retryBannerButton.style.display = 'inline-block';
         setBannerToErrorState(error.message);
+        updateStatus(`❌ ${error.message}`, true);
     } finally {
         // Re-enable the button once the process is truly finished or failed
         uploadButton.disabled = false;
@@ -1290,13 +1330,6 @@ async function runUploadOrchestrator() {
 async function manageUploadLifecycle(config) {
     const MAX_RETRIES = 3;
     const modalStatusSpan = document.getElementById('ch-modal-status');
-
-    const updateStatus = (message) => {
-        statusSpan.textContent = message;
-        if (modalStatusSpan) {
-            modalStatusSpan.textContent = message;
-        }
-    };
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
