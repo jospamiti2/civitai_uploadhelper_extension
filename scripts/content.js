@@ -544,6 +544,13 @@ function createMetadataModal() {
     metadataModal = modalOverlay;
 
     // --- Event Listeners ---
+    const handleKeyDown = (event) => {
+        if (metadataModal.style.display === 'flex' && event.key === 'Escape') {
+            hideModal();
+        }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+
     postButton.addEventListener('click', handleStartButtonClick);
     modalOverlay.addEventListener('click', (e) => {
         if (e.target === modalOverlay) hideModal();
@@ -622,12 +629,29 @@ async function handleStartButtonClick() {
         // --- Part 3: Add Tools ---
         const videoTools = getVideoToolDataFromModal();
         if (videoTools.length > 0) {
-            updateStatus(`⏳ Adding ${videoTools.length} tools...`);
-            await addToolsFromList(videoTools);
-            console.log("✅ All tools added.");
+            updateStatus(`⏳ Adding ${videoTools.length} video tools...`);
+            let toolsSuccess = false;
+            const MAX_TOOL_ATTEMPTS = 3;
+            for (let attempt = 1; attempt <= MAX_TOOL_ATTEMPTS; attempt++) {
+                try {
+                    await addToolsFromList(videoTools); // Perform one full attempt
+                    // Verify ALL tools were added
+                    await Promise.all(videoTools.map(tool => waitForToolAdded(tool, 5000)));
+                    toolsSuccess = true;
+                    console.log("✅ All video tools successfully added and verified.");
+                    break; // Success!
+                } catch (error) {
+                    console.error(`❌ Attempt ${attempt} to add tools failed:`, error.message);
+                    if (attempt < MAX_TOOL_ATTEMPTS) console.log("TRYING TOOLS AGAIN!");
+                }
+            }
+            if (!toolsSuccess) {
+                updateStatus(`❌ Failed to add all tools after ${MAX_TOOL_ATTEMPTS} attempts. Continuing.`, true);
+                await new Promise(r => setTimeout(r, 2000));
+            }
         } else {
-            console.log("No tools to add.");
-        }        
+            console.log("No video tools to add.");
+        }     
 
         updateStatus("✅ All tasks complete!");
         updateStatus("Angry Helper has finished all automated tasks!");
@@ -668,6 +692,75 @@ async function handleStartButtonClick() {
 
 
 // --- LOGIC ---
+
+
+/**
+ * Waits and polls the page to verify that a resource has been successfully added.
+ * @param {string} resourceName The name of the resource to look for.
+ * @param {number} timeout The total time to wait in milliseconds.
+ * @returns {Promise<boolean>} A promise that resolves to true if found, or rejects if it times out.
+ */
+function waitForResourceAdded(resourceName, timeout) {
+    return new Promise((resolve, reject) => {
+        const checkInterval = 250;
+        const timeoutId = setTimeout(() => {
+            clearInterval(intervalId);
+            reject(new Error(`Verification Timeout: Resource "${resourceName}" did not appear on the page within ${timeout}ms.`));
+        }, timeout);
+
+        const intervalId = setInterval(() => {
+            if (!videoContainerElement) return;
+            const resourceHeader = Array.from(videoContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Resources');
+            if (!resourceHeader) return;
+
+            const container = resourceHeader.parentElement.parentElement.parentElement;
+            if (!container) return;
+
+            const resourceLinks = container.querySelectorAll('a');
+            const found = Array.from(resourceLinks).some(link => link.innerText.trim().startsWith(resourceName));
+
+            if (found) {
+                clearInterval(intervalId);
+                clearTimeout(timeoutId);
+                resolve(true);
+            }
+        }, checkInterval);
+    });
+}
+
+/**
+ * Waits and polls the page to verify that a tool has been successfully added.
+ * @param {string} toolName The name of the tool to look for.
+ * @param {number} timeout The total time to wait in milliseconds.
+ * @returns {Promise<boolean>} A promise that resolves to true if found, or rejects if it times out.
+ */
+function waitForToolAdded(toolName, timeout) {
+    return new Promise((resolve, reject) => {
+        const checkInterval = 250;
+        const timeoutId = setTimeout(() => {
+            clearInterval(intervalId);
+            reject(new Error(`Verification Timeout: Tool "${toolName}" did not appear on the page within ${timeout}ms.`));
+        }, timeout);
+
+        const intervalId = setInterval(() => {
+            if (!videoContainerElement) return;
+            const toolHeader = Array.from(videoContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Tools');
+            if (!toolHeader) return;
+
+            const toolsSectionContainer = toolHeader.parentElement.parentElement.parentElement;
+            if (!toolsSectionContainer) return;
+
+            const addedToolSpans = toolsSectionContainer.querySelectorAll('ul li span');
+            const isPresent = Array.from(addedToolSpans).some(span => span.textContent.trim() === toolName);
+
+            if (isPresent) {
+                clearInterval(intervalId);
+                clearTimeout(timeoutId);
+                resolve(true);
+            }
+        }, checkInterval);
+    });
+}
 
 /**
  * Simulates a realistic mouse click on an element by dispatching
@@ -776,8 +869,16 @@ async function addToolsFromList(toolList) {
     // 3. Loop through the tools and click the checkbox for each one.
     for (const toolName of toolList) {
         console.log(`Searching for tool: "${toolName}"`);
-        const allOptions = popover.querySelectorAll('div[role="option"]');
-        const targetOption = Array.from(allOptions).find(opt => opt.querySelector('span')?.textContent.trim() === toolName);
+        // We will poll inside the loop to wait for the specific option to be ready.
+        let targetOption = null;
+        let attempts = 20; // Try for 2 seconds
+        while (attempts > 0) {
+            const allOptions = popover.querySelectorAll('div[role="option"]');
+            targetOption = Array.from(allOptions).find(opt => opt.querySelector('span')?.textContent.trim() === toolName);
+            if (targetOption) break; // Found it!
+            await new Promise(r => setTimeout(r, 100));
+            attempts--;
+        }
 
         if (targetOption) {
             // Find the specific checkbox inside the row we found.
@@ -1008,12 +1109,12 @@ async function addResourcesFromList(loraList) {
                         await new Promise(r => setTimeout(r, 500));
                     }
                 }
+                if (attempt === MAX_ATTEMPTS) {
+                    updateStatus(`❌ Failed to add "${lora.title}". Continuing anyway.`, true);
+                    await new Promise(r => setTimeout(r, 2000)); 
+                }                
             }
             if (attempt < MAX_ATTEMPTS) console.log("TRYING AGAIN!");
-        }
-
-        if (!success) {
-            throw new Error(`Failed to add "${lora.title}" after ${MAX_ATTEMPTS} attempts.`);
         }
     }
 }
@@ -1073,6 +1174,39 @@ async function addSingleResource(resourceName, resourceVersion) {
     }
     if (!targetCard) throw new Error(`Could not find a card with the exact title "${resourceName}".`);
     console.log(`Found card for "${resourceName}".`);
+
+
+    if (resourceVersion && resourceVersion.trim() !== '') {
+        const versionInput = targetCard.querySelector('input.mantine-Select-input');
+        if (!versionInput) throw new Error("Could not find version selector on the card.");
+
+        // Check if the correct version is already selected
+        if (versionInput.value.trim() === resourceVersion.trim()) {
+            console.log(`Version "${resourceVersion}" is already selected. Skipping.`);
+        } else {
+            console.log(`Selecting version "${resourceVersion}"...`);
+            versionInput.click();
+
+            // Wait for the version dropdown to appear
+            const versionDropdown = await waitForInteractiveElement('div.mantine-Select-dropdown', 5000);
+            
+            // Find the specific version option inside the dropdown
+            const allVersionOptions = versionDropdown.querySelectorAll('div[data-combobox-option]');
+            const targetVersionOption = Array.from(allVersionOptions).find(opt => opt.querySelector('span')?.textContent.trim() === resourceVersion.trim());
+
+            if (targetVersionOption) {
+                console.log(`Found version option. Clicking it.`);
+                targetVersionOption.click();
+                // Wait for the dropdown to disappear to confirm selection
+                await waitForElementToDisappear('div.mantine-Select-dropdown', 3000);
+            } else {
+                console.warn(`Could not find version "${resourceVersion}" in the dropdown. The default will be used.`);
+                // Click outside the dropdown to close it gracefully
+                document.body.click();
+                await waitForElementToDisappear('div.mantine-Select-dropdown', 3000);
+            }
+        }
+    }    
     
     const selectButton = Array.from(targetCard.querySelectorAll('button')).find(b => b.textContent === 'Select');
     if (!selectButton) throw new Error("Could not find 'Select' button on the resource card.");
