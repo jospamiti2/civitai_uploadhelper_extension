@@ -1,8 +1,9 @@
-let mediaInfoInstance = null;
 import mediaInfoFactory from '../lib/mediainfo.min.js';
+import { getData } from '../lib/exif.js';
 
 console.log("✅ Hello from the Civitai Helper content script!");
 
+let mediaInfoInstance = null;
 let videoToUpload = null;
 let imageToUpload = null;
 let metadataModal = null;
@@ -372,11 +373,11 @@ function createMetadataModal() {
 
     const scrollableContent = document.createElement('div');
     Object.assign(scrollableContent.style, {
-        overflowY: 'auto', 
-        flexGrow: '1',     
-        paddingRight: '10px' 
+        overflowY: 'auto',
+        flexGrow: '1',
+        paddingRight: '10px'
     });
-    modalContainer.appendChild(scrollableContent);    
+    modalContainer.appendChild(scrollableContent);
 
     // --- Video Section (Prompt, Seed, etc.) ---
     const videoSection = document.createElement('div');
@@ -537,12 +538,26 @@ function createMetadataModal() {
 
     const imageSection = document.createElement('div');
     imageSection.id = 'ch-image-section';
-    imageSection.style.display = 'block';
-    imageSection.innerHTML = '<h3 style="margin-top: 20px;">Image Generation Data</h3>';
-    imageSection.appendChild(createInputRow('Resources (;):', createTextInput('ch-image-resources')));
+    // It starts hidden and will only appear after the user selects an image file.
+    imageSection.style.display = 'none';
+    imageSection.innerHTML = '<h3 style="margin-top: 20px; border-top: 1px solid #555; padding-top: 15px;">Image Generation Data</h3>';
+
+    imageSection.appendChild(createInputRow('Prompt:', createTextarea('ch-image-prompt', 2)));
+    imageSection.appendChild(createInputRow('Negative Prompt:', createTextarea('ch-image-neg-prompt', 2)));
+    imageSection.appendChild(createInputRow('Steps:', createNumberInput('ch-image-steps')));
+    imageSection.appendChild(createInputRow('Sampler:', createTextInput('ch-image-sampler')));
+    imageSection.appendChild(createInputRow('Guidance Scale:', createNumberInput('ch-image-guidance')));
+    imageSection.appendChild(createInputRow('Seed:', createNumberInput('ch-image-seed')));
+    // We also need places for tools and techniques for the image
     imageSection.appendChild(createInputRow('Tools (;):', createTextInput('ch-image-tools')));
     imageSection.appendChild(createInputRow('Techniques (;):', createTextInput('ch-image-techniques')));
-    scrollableContent.appendChild(imageSection);
+
+    modalContainer.appendChild(imageSection);
+
+
+
+
+
 
 
     // --- Actions & Settings Link ---
@@ -804,6 +819,207 @@ async function handleStartButtonClick() {
 
 
 // --- LOGIC ---
+
+/**
+ * Populates the image section of the modal with parsed metadata.
+ * @param {object} data The parsed data object from readImageMetadata.
+ */
+function populateImageModalData(data) {
+    if (!data) return;
+
+    // Helper to find an element and set its value
+    const set = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.value = value || '';
+    };
+
+    set('ch-image-prompt', data.positive_prompt);
+    set('ch-image-neg-prompt', data.negative_prompt);
+    set('ch-image-steps', data.steps);
+    set('ch-image-sampler', data.sampler_name);
+    set('ch-image-guidance', data.cfg);
+    set('ch-image-seed', data.seed);
+
+    // After filling the data, make sure the section is visible.
+    const imageSection = document.getElementById('ch-image-section');
+    if (imageSection) imageSection.style.display = 'block';
+}
+
+/**
+ * Reads and parses metadata from a ComfyUI PNG file by manually finding the 'tEXt' chunk.
+ * This version traces the workflow backward from the SaveImage node to handle complex workflows.
+ * @param {File} file The PNG image file to parse.
+ * @returns {Promise<object|null>} A promise that resolves with the parsed workflow object, or null.
+ */
+function readImageMetadata(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+
+        reader.onload = (event) => {
+            try {
+                const buffer = event.target.result;
+                const view = new DataView(buffer);
+
+                // Check for PNG signature
+                if (view.getUint32(0) !== 0x89504E47 || view.getUint32(4) !== 0x0D0A1A0A) {
+                    console.log("Not a valid PNG file.");
+                    resolve(null);
+                    return;
+                }
+
+                let offset = 8;
+                let workflowJSON = null;
+
+                // Loop through the PNG chunks to find the 'tEXt' chunk with the 'prompt' keyword
+                while (offset < view.byteLength) {
+                    const length = view.getUint32(offset);
+                    const type = String.fromCharCode(view.getUint8(offset + 4), view.getUint8(offset + 5), view.getUint8(offset + 6), view.getUint8(offset + 7));
+
+                    if (type === 'tEXt') {
+                        const chunkData = new Uint8Array(buffer, offset + 8, length);
+                        const decoder = new TextDecoder("utf-8");
+                        const text = decoder.decode(chunkData);
+                        const [keyword, value] = text.split('\0');
+
+                        if (keyword === 'prompt') {
+                            workflowJSON = value;
+                            break;
+                        }
+                    }
+
+                    offset += 12 + length; // Move to the next chunk
+
+                    if (type === 'IEND') {
+                        break; // End of image chunks
+                    }
+                }
+
+                if (!workflowJSON) {
+                    console.log("No 'prompt' text chunk found in PNG.");
+                    resolve(null);
+                    return;
+                }
+
+                const workflow = JSON.parse(workflowJSON);
+
+                // Find the final SaveImage node
+                let saveImageNodeId = null;
+                for (const nodeId in workflow) {
+                    if (workflow[nodeId].class_type === 'SaveImage') {
+                        // In a complex workflow, there might be multiple SaveImage nodes.
+                        // A more robust solution might be needed if that's a common case.
+                        // For now, we'll take the first one we find.
+                        saveImageNodeId = nodeId;
+                        break;
+                    }
+                }
+
+                if (!saveImageNodeId) {
+                    console.log("Could not find SaveImage node in the workflow.");
+                    resolve(null);
+                    return;
+                }
+
+                // Function to trace back through the workflow from a given node and input
+                const findUpstreamNode = (startNodeId, inputName, targetClassType) => {
+                    let currentNodeId = startNodeId;
+                    while (currentNodeId) {
+                        const currentNode = workflow[currentNodeId];
+                        if (!currentNode || !currentNode.inputs || !currentNode.inputs[inputName]) {
+                            return null;
+                        }
+                        const upstreamNodeId = currentNode.inputs[inputName][0];
+                        const upstreamNode = workflow[upstreamNodeId];
+
+                        if (upstreamNode.class_type === targetClassType) {
+                            return upstreamNode;
+                        }
+                        currentNodeId = upstreamNodeId; // Continue traversing up
+                    }
+                    return null;
+                };
+                
+                // Function to trace back and find all *active* LoRAs
+                const findAllUpstreamLoras = (startNode) => {
+                    const loras = [];
+                    let currentNode = startNode;
+                    while (currentNode && currentNode.inputs && currentNode.inputs.model) {
+                        const modelInputNodeId = currentNode.inputs.model[0];
+                        const modelInputNode = workflow[modelInputNodeId];
+                        if (modelInputNode) {
+                            // A node's mode is 0 for active, 2 for bypassed.
+                            if (modelInputNode.class_type === 'LoraLoader' && modelInputNode.mode !== 2) {
+                                loras.push(modelInputNode.inputs.lora_name);
+                            }
+                            currentNode = modelInputNode;
+                        } else {
+                           break;
+                        }
+                    }
+                    return loras;
+                };
+
+                // Trace back from SaveImage to find the KSampler
+                const vaeDecodeNodeId = workflow[saveImageNodeId].inputs.images[0];
+                const ksamplerNodeId = workflow[vaeDecodeNodeId].inputs.samples[0];
+                const ksamplerNode = workflow[ksamplerNodeId];
+
+                if (ksamplerNode.class_type !== 'KSampler') {
+                    console.log("Could not trace back to a KSampler node.");
+                    resolve(null);
+                    return;
+                }
+                
+                const ksamplerInputs = ksamplerNode.inputs;
+
+                const posPromptNodeKey = ksamplerInputs.positive[0];
+                const negPromptNodeKey = ksamplerInputs.negative[0];
+                const positive_prompt = workflow[posPromptNodeKey]?.inputs.text || '';
+                const negative_prompt = workflow[negPromptNodeKey]?.inputs.text || '';
+                
+                // Trace back to find the base model
+                let baseModelNode = null;
+                let currentNodeToCheck = ksamplerNode;
+                while(currentNodeToCheck && currentNodeToCheck.inputs && currentNodeToCheck.inputs.model) {
+                    const modelInputNodeId = currentNodeToCheck.inputs.model[0];
+                    const modelInputNode = workflow[modelInputNodeId];
+                    if (modelInputNode.class_type === 'CheckpointLoaderSimple') {
+                        baseModelNode = modelInputNode;
+                        break;
+                    }
+                    currentNodeToCheck = modelInputNode;
+                }
+                
+                const base_model = baseModelNode ? baseModelNode.inputs.ckpt_name : null;
+                
+                // Find all LoRAs by tracing back the model connections
+                const loras = findAllUpstreamLoras(ksamplerNode);
+
+                const parsedData = {
+                    positive_prompt,
+                    negative_prompt,
+                    steps: ksamplerInputs.steps,
+                    sampler_name: ksamplerInputs.sampler_name,
+                    scheduler: ksamplerInputs.scheduler,
+                    cfg: ksamplerInputs.cfg,
+                    seed: ksamplerInputs.seed,
+                    base_model: base_model,
+                    loras: loras.reverse(), 
+                };
+
+                console.log("✅ Successfully parsed PNG workflow:", parsedData);
+                resolve(parsedData);
+
+            } catch (error) {
+                console.error("Failed to parse PNG metadata:", error);
+                reject(error);
+            }
+        };
+
+        reader.onerror = (error) => reject(error);
+        reader.readAsArrayBuffer(file);
+    });
+}
 
 /**
  * Automates adding a single Technique to the post. This is a single-select action.
@@ -1900,15 +2116,38 @@ videoInput.addEventListener('change', async () => {
     }
 });
 
-imageInput.addEventListener('change', () => {
+imageInput.addEventListener('change', async () => {
+    // Get the selected file
     imageToUpload = imageInput.files.length > 0 ? imageInput.files[0] : null;
-    checkUploadability();
+    checkUploadability(); // Update the main "Upload" button state
+    
+    const imageSection = document.getElementById('ch-image-section');
 
-    if (!metadataModal) createMetadataModal();
-    //const imageSection = document.getElementById('ch-image-section');
-    //if (imageSection) {
-    //    imageSection.style.display = imageToUpload ? 'block' : 'none';
-    //}    
+    if (imageToUpload) {
+        // We have a file, so show the image section
+        if (imageSection) imageSection.style.display = 'block';
+        
+        try {
+            updateStatus("⏳ Reading image metadata...");
+            // Call our new, working function to get the data
+            const metadata = await readImageMetadata(imageToUpload);
+            
+            if (metadata) {
+                // If we got data, populate the UI with it
+                populateImageModalData(metadata);
+                updateStatus("✅ Image metadata parsed.");
+            } else {
+                // If no metadata, let the user know
+                updateStatus("ℹ️ No generation metadata found in image.");
+            }
+        } catch (error) {
+            console.error("Error processing image metadata:", error);
+            updateStatus("❌ Failed to read image metadata.", true);
+        }
+    } else {
+        if (imageSection) imageSection.style.display = 'none';
+        updateStatus(""); // Clear the status
+    }
 });
 
 uploadButton.addEventListener('click', runUploadOrchestrator);
