@@ -7,7 +7,7 @@ let mediaInfoInstance = null;
  * @returns {object|null} A structured object with extracted metadata, or null if parsing fails.
  */
 function parseComfyMetadata(commentData) {
-    if (!commentData) {
+   if (!commentData) {
         return null;
     }
 
@@ -22,6 +22,39 @@ function parseComfyMetadata(commentData) {
             acc[node.id] = node;
             return acc;
         }, {});
+
+        const findAllAncestors = (startNodeId, graph) => {
+            const ancestors = new Map();
+            const queue = [startNodeId];
+            const visited = new Set();
+
+            while (queue.length > 0) {
+                const currentId = queue.shift();
+                if (!currentId || visited.has(currentId)) {
+                    continue;
+                }
+                visited.add(currentId);
+
+                const node = graph[currentId];
+                if (!node) {
+                    continue;
+                }
+                
+                // Store the node itself, keyed by its ID
+                ancestors.set(currentId, node);
+
+                // Add all linked input nodes to the queue for traversal
+                if (node.inputs) {
+                    for (const input of Object.values(node.inputs)) {
+                        // An input is a link if it's an array with a string node ID at the first position
+                        if (Array.isArray(input) && typeof input[0] === 'string') {
+                            queue.push(input[0]);
+                        }
+                    }
+                }
+            }
+            return Array.from(ancestors.values());
+        };        
 
         // --- Helper function to find the source of an input by tracing links ---
         const findUpstreamSourceNode = (startNodeId, inputName) => {
@@ -115,6 +148,7 @@ function parseComfyMetadata(commentData) {
             denoise: finalKSampler.inputs.denoise,
             positive_prompt: '',
             negative_prompt: '',
+            technique: 'txt2vid', // Default value,
             resources: {}
         };
 
@@ -137,7 +171,7 @@ function parseComfyMetadata(commentData) {
             // You can add vae, clip etc. here if needed
         };
 
-        // Identify other resources from the graph that might not be in the model chain
+        // 6. Identify other resources from the graph that might not be in the model chain
         for (const node of Object.values(executedGraph)) {
             if (node.class_type === 'VAELoader') {
                 extractedData.resources.vae = node.inputs.vae_name;
@@ -146,6 +180,28 @@ function parseComfyMetadata(commentData) {
                 extractedData.resources.clip = node.inputs.clip_name;
             }
         }
+
+        // 7. Determine the generation technique (img2vid, vid2vid, txt2vid)
+        if (finalKSampler.inputs.latent_image) {
+            const latentSourceNodeId = finalKSampler.inputs.latent_image[0];
+            const latentAncestors = findAllAncestors(latentSourceNodeId, executedGraph);
+
+            // Define known class types for each technique. This can be expanded.
+            const vidNodeTypes = ['LoadVideo', 'VHS_LoadVideo']; // For vid2vid
+            const imgNodeTypes = ['LoadImage', 'WanImageToVideo', 'WanFirstLastFrameToVideo']; // For img2vid
+            const emptyNodeTypes = ['EmptyLatentImage']; // For txt2vid
+
+            // Check with priority: vid2vid > img2vid > txt2vid
+            if (latentAncestors.some(node => vidNodeTypes.includes(node.class_type))) {
+                extractedData.technique = 'vid2vid';
+            } else if (latentAncestors.some(node => imgNodeTypes.includes(node.class_type))) {
+                extractedData.technique = 'img2vid';
+            } else if (latentAncestors.some(node => emptyNodeTypes.includes(node.class_type))) {
+                extractedData.technique = 'txt2vid';
+            }
+            // If none of these specific nodes are found, we stick with the default 'txt2vid',
+            // as it's the most basic form of generation.
+        }        
 
 
         return extractedData;
