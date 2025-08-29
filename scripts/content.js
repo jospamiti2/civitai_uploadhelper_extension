@@ -881,6 +881,12 @@ async function handleStartButtonClick() {
 
 
 
+        // Image tasks (if applicable)
+        if (imageToUpload && imageContainerElement) {
+            updateStatus("⏳ Filling image metadata...");
+            await initiateImageMetadataFill(); 
+        }
+
 
         updateStatus("✅ All tasks complete!");
         updateStatus("Angry Helper has finished all automated tasks!");
@@ -922,6 +928,77 @@ async function handleStartButtonClick() {
 
 // --- LOGIC ---
 
+/**
+ * Finds and fills the metadata (prompt, sampler, etc.) for the IMAGE section.
+ */
+async function initiateImageMetadataFill() {
+    console.log("🚀 Starting IMAGE metadata fill...");
+
+    if (!imageContainerElement) {
+        throw new Error("Cannot fill image metadata: image container element not found on page.");
+    }
+
+    // --- Find the 'Prompt' heading and 'EDIT' button within the IMAGE container ---
+    const h3Elements = imageContainerElement.querySelectorAll('h3');
+    const promptHeader = Array.from(h3Elements).find(h => h.textContent.trim() === 'Prompt');
+    if (!promptHeader) throw new Error("Could not find 'Prompt' heading in image container.");
+
+    const parentDiv = promptHeader.parentElement;
+    const editButton = parentDiv.querySelector('button');
+    if (!editButton || !editButton.textContent.includes('EDIT')) {
+        throw new Error("Could not find 'EDIT' button in image container.");
+    }
+    
+    console.log("✅ Found image 'EDIT' button. Clicking it.");
+    editButton.click();
+
+    // --- Wait for the modal and fill the data ---
+    const modalContentSelector = 'section.mantine-Modal-content';
+    const modal = await waitForInteractiveElement(modalContentSelector, 5000);
+    console.log("✅ Image metadata modal is open and interactive.");
+    
+    try {
+        // Get the data from our extension's IMAGE UI fields
+        const data = {
+            prompt: document.getElementById('ch-image-prompt').value,
+            negativePrompt: document.getElementById('ch-image-neg-prompt').value,
+            cfg: document.getElementById('ch-image-guidance').value,
+            steps: document.getElementById('ch-image-steps').value,
+            sampler: document.getElementById('ch-image-sampler').value,
+            seed: document.getElementById('ch-image-seed').value
+        };
+        console.log("📝 Data to fill for image:", data);
+
+        // Fill the simple fields
+        setInputValue(modal.querySelector('#input_prompt'), data.prompt);
+        setInputValue(modal.querySelector('#input_negativePrompt'), data.negativePrompt);
+        setInputValue(modal.querySelector('#input_cfgScale'), data.cfg);
+        setInputValue(modal.querySelector('#input_steps'), data.steps);
+        setInputValue(modal.querySelector('#input_seed'), data.seed);
+
+        // The image sampler uses the same buggy component as the video one
+        const civitaiSampler = SAMPLER_MAP[data.sampler.trim().toLowerCase()] || data.sampler;
+        await selectSampler(modal, civitaiSampler); 
+
+        // Handle save
+        const saveButton = Array.from(modal.querySelectorAll('button')).find(b => b.textContent === 'Save');
+        if (!saveButton) throw new Error("Could not find the 'Save' button.");
+        const modalTitle = modal.querySelector('.mantine-Modal-title');
+        if (modalTitle) modalTitle.click();
+        await new Promise(r => setTimeout(r, 100));
+        saveButton.click();
+        
+        await waitForElementToDisappear(modalContentSelector, 5000);
+        console.log("🎉 Image metadata modal filled and closed successfully!");
+
+    } catch (error) {
+        // If something goes wrong, try to close the modal gracefully before re-throwing
+        const closeButton = modal.querySelector('button.mantine-Modal-close');
+        if (closeButton) closeButton.click();
+        // Re-throw the error so the main orchestrator can catch it
+        throw new Error(`Failed during image metadata fill: ${error.message}`);
+    }
+}
 
 
 function getImageToolDataFromModal() {
