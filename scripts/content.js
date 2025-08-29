@@ -1,5 +1,4 @@
 import mediaInfoFactory from '../lib/mediainfo.min.js';
-import { getData } from '../lib/exif.js';
 
 console.log("✅ Hello from the Civitai Helper content script!");
 
@@ -538,22 +537,123 @@ function createMetadataModal() {
 
     const imageSection = document.createElement('div');
     imageSection.id = 'ch-image-section';
-    // It starts hidden and will only appear after the user selects an image file.
-    imageSection.style.display = 'none';
+    imageSection.style.display = 'none'; // Starts hidden
     imageSection.innerHTML = '<h3 style="margin-top: 20px; border-top: 1px solid #555; padding-top: 15px;">Image Generation Data</h3>';
 
+    // Add basic fields for Image
     imageSection.appendChild(createInputRow('Prompt:', createTextarea('ch-image-prompt', 2)));
     imageSection.appendChild(createInputRow('Negative Prompt:', createTextarea('ch-image-neg-prompt', 2)));
     imageSection.appendChild(createInputRow('Steps:', createNumberInput('ch-image-steps')));
     imageSection.appendChild(createInputRow('Sampler:', createTextInput('ch-image-sampler')));
     imageSection.appendChild(createInputRow('Guidance Scale:', createNumberInput('ch-image-guidance')));
     imageSection.appendChild(createInputRow('Seed:', createNumberInput('ch-image-seed')));
-    // We also need places for tools and techniques for the image
-    imageSection.appendChild(createInputRow('Tools (;):', createTextInput('ch-image-tools')));
-    imageSection.appendChild(createInputRow('Techniques (;):', createTextInput('ch-image-techniques')));
 
-    modalContainer.appendChild(imageSection);
+    // --- Dedicated Resource Section for the Image ---
+    const imageResourcesSection = document.createElement('div');
+    imageResourcesSection.innerHTML = `<h4 style="margin-top: 20px; border-top: 1px solid #777; padding-top: 10px;">Image Resources</h4>`;
 
+    // Base Model for Image
+    imageResourcesSection.appendChild(createInputRow('Base Model:', createTextInput('ch-image-base-model')));
+
+    // Container for Recognized Image LoRAs
+    imageResourcesSection.innerHTML += '<h5 style="margin-bottom: 5px;">Recognized LoRAs</h5>';
+    const recognizedImageLoras = document.createElement('div');
+    recognizedImageLoras.id = 'ch-image-recognized-loras';
+    imageResourcesSection.appendChild(recognizedImageLoras);
+
+    // Container for Unrecognized Image LoRAs
+    imageResourcesSection.innerHTML += '<h5 style="margin-top: 10px; margin-bottom: 5px;">Unrecognized LoRAs</h5>';
+    const unrecognizedImageLoras = document.createElement('div');
+    unrecognizedImageLoras.id = 'ch-image-unrecognized-loras';
+    imageResourcesSection.appendChild(unrecognizedImageLoras);
+
+    // Controls for adding new image resources
+    const addImageResourceBtn = document.createElement('button');
+    addImageResourceBtn.id = 'ch-image-add-resource-btn';
+    addImageResourceBtn.textContent = 'Add more loras';
+    Object.assign(addImageResourceBtn.style, {
+        marginTop: '10px',
+        padding: '5px 10px',
+        border: '1px solid #777',
+        borderRadius: '4px',
+        backgroundColor: '#5f6a78',
+        color: 'white',
+        cursor: 'pointer'
+    });
+    imageResourcesSection.appendChild(addImageResourceBtn);
+
+    // --- Image Techniques UI ---
+    const imageTechniquesContainer = document.createElement('div');
+    imageTechniquesContainer.style.marginTop = '20px';
+    imageTechniquesContainer.style.paddingTop = '15px';
+    imageTechniquesContainer.style.borderTop = '1px solid #555';
+
+    const imageTechniquesLabel = document.createElement('label');
+    imageTechniquesLabel.textContent = 'Image Technique:';
+    imageTechniquesLabel.style.fontWeight = 'bold';
+    imageTechniquesLabel.style.marginBottom = '10px';
+    imageTechniquesLabel.style.display = 'block';
+    imageTechniquesContainer.appendChild(imageTechniquesLabel);
+
+    const imageTechniqueRadioGroup = document.createElement('div');
+    imageTechniqueRadioGroup.style.display = 'flex';
+    imageTechniqueRadioGroup.style.gap = '15px';
+    const IMAGE_TECHNIQUES = ["txt2img", "img2img", "inpainting", "workflow", "controlnet"];
+    IMAGE_TECHNIQUES.forEach(technique => {
+        const radioContainer = document.createElement('div');
+        const radioInput = document.createElement('input');
+        radioInput.type = 'radio';
+        radioInput.name = 'ch-image-technique';
+        radioInput.id = `ch-image-technique-${technique}`;
+        radioInput.value = technique;
+        const radioLabel = document.createElement('label');
+        radioLabel.htmlFor = radioInput.id;
+        radioLabel.textContent = technique.toUpperCase();
+        radioLabel.style.marginLeft = '5px';
+        radioLabel.style.cursor = 'pointer';
+        radioContainer.appendChild(radioInput);
+        radioContainer.appendChild(radioLabel);
+        imageTechniqueRadioGroup.appendChild(radioContainer);
+    });
+    imageTechniquesContainer.appendChild(imageTechniqueRadioGroup);
+    imageSection.appendChild(imageTechniquesContainer);
+
+
+    // --- Image Tools UI ---
+    const imageToolsSection = document.createElement('div');
+    imageToolsSection.id = 'ch-image-tools-section';
+    imageToolsSection.innerHTML = '<h3 style="margin-top: 20px; border-top: 1px solid #555; padding-top: 15px;">Image Tools</h3>';
+
+    const selectedImageToolsContainer = document.createElement('div');
+    selectedImageToolsContainer.id = 'ch-selected-image-tools';
+    Object.assign(selectedImageToolsContainer.style, { display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '10px' });
+    imageToolsSection.appendChild(selectedImageToolsContainer);
+
+    const showAllImageToolsBtn = document.createElement('button');
+    showAllImageToolsBtn.textContent = 'Show All Tools ▼';
+    Object.assign(showAllImageToolsBtn.style, { padding: '5px 10px', cursor: 'pointer', border: '1px solid #777', borderRadius: '4px', backgroundColor: '#5f6a78', color: 'white' });
+    imageToolsSection.appendChild(showAllImageToolsBtn);
+
+    const allImageToolsContainer = document.createElement('div');
+    allImageToolsContainer.id = 'ch-all-image-tools';
+    Object.assign(allImageToolsContainer.style, { display: 'none', marginTop: '15px', flexWrap: 'wrap', gap: '10px 15px', maxHeight: '200px', overflowY: 'auto', border: '1px solid #555', padding: '10px', borderRadius: '5px' });
+
+    ALL_CIVITAI_TOOLS.forEach(toolName => {
+        allImageToolsContainer.appendChild(createToolCheckbox(toolName, 'image'));
+    });
+    imageToolsSection.appendChild(allImageToolsContainer);
+
+    showAllImageToolsBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const isHidden = allImageToolsContainer.style.display === 'none';
+        allImageToolsContainer.style.display = isHidden ? 'flex' : 'none';
+        showAllImageToolsBtn.textContent = isHidden ? 'Hide All Tools ▲' : 'Show All Tools ▼';
+    });
+    imageSection.appendChild(imageToolsSection);
+
+
+    imageSection.appendChild(imageResourcesSection);
+    scrollableContent.appendChild(imageSection);
 
 
 
@@ -696,11 +796,11 @@ window.hideModal = hideModal;
 
 async function handleStartButtonClick() {
     const postButton = document.getElementById('ch-modal-post-btn');
-    const modalStatus = document.getElementById('ch-modal-status');
     postButton.disabled = true;
 
     try {
         hideModal();
+        // Video tasks
         // --- Part 1: Fill the metadata (prompts, sampler, etc.) ---
         updateStatus("⏳ Filling metadata...");
         await initiateVideoMetadataFill();
@@ -780,6 +880,8 @@ async function handleStartButtonClick() {
         }
 
 
+
+
         updateStatus("✅ All tasks complete!");
         updateStatus("Angry Helper has finished all automated tasks!");
         // We can hide our own modal now, or leave it.
@@ -820,19 +922,83 @@ async function handleStartButtonClick() {
 
 // --- LOGIC ---
 
+
+
+function getImageToolDataFromModal() {
+    const tools = [];
+    const container = document.getElementById('ch-all-image-tools');
+    if (container) {
+        const checkedBoxes = container.querySelectorAll('input[type="checkbox"]:checked');
+        checkedBoxes.forEach(cb => tools.push(cb.dataset.toolName));
+    }
+    return tools;
+}
+
+
+/**
+ * Populates a specific resource section (video or image) with base model and LoRA data.
+ * @param {object} resourceData The data object containing .base_model and .loras properties.
+ * @param {string} prefix The prefix for the element IDs ('video' or 'image').
+ */
+async function populateResourceSection(resourceData, prefix) {
+    if (!resourceData) return;
+
+    // Set Base Model
+    const baseModelInput = document.getElementById(`ch-${prefix}-base-model`);
+    if (baseModelInput) baseModelInput.value = resourceData.base_model || '';
+
+    // Populate LoRAs
+    const recognizedContainer = document.getElementById(`ch-${prefix}-recognized-loras`);
+    const unrecognizedContainer = document.getElementById(`ch-${prefix}-unrecognized-loras`);
+    if (!recognizedContainer || !unrecognizedContainer) return;
+
+    recognizedContainer.innerHTML = '';
+    unrecognizedContainer.innerHTML = '';
+
+    const storage = await chrome.storage.local.get('loraMappings');
+    const loraMappings = storage.loraMappings || {};
+
+    if (resourceData.loras) {
+        for (const filename of resourceData.loras) {
+            if (loraMappings[filename]) {
+                const knownData = loraMappings[filename];
+                createLoraRow(recognizedContainer, { filename, title: knownData.title, version: knownData.version });
+            } else {
+                createLoraRow(unrecognizedContainer, { filename });
+            }
+        }
+    }
+
+    // Hook up the section-specific 'Add Manual' button
+    const addResourceBtn = document.getElementById(`ch-${prefix}-add-resource-btn`);
+    if (addResourceBtn) {
+        addResourceBtn.onclick = () => {
+            createLoraRow(unrecognizedContainer, { filename: '' });
+            const newRow = unrecognizedContainer.lastElementChild;
+            if (newRow) {
+                const filenameInput = newRow.querySelector('.filename');
+                filenameInput.removeAttribute('readonly');
+                filenameInput.style.backgroundColor = 'white';
+                filenameInput.style.color = 'black';
+            }
+        };
+    }
+}
+
+
 /**
  * Populates the image section of the modal with parsed metadata.
  * @param {object} data The parsed data object from readImageMetadata.
  */
-function populateImageModalData(data) {
+async function populateImageModalData(data) {
     if (!data) return;
 
-    // Helper to find an element and set its value
     const set = (id, value) => {
         const el = document.getElementById(id);
         if (el) el.value = value || '';
     };
 
+    // Populate the simple fields
     set('ch-image-prompt', data.positive_prompt);
     set('ch-image-neg-prompt', data.negative_prompt);
     set('ch-image-steps', data.steps);
@@ -840,7 +1006,42 @@ function populateImageModalData(data) {
     set('ch-image-guidance', data.cfg);
     set('ch-image-seed', data.seed);
 
-    // After filling the data, make sure the section is visible.
+    // Call the new helper to populate the image-specific resource section
+    await populateResourceSection(data, 'image');
+
+    const txt2imgRadio = document.getElementById('ch-image-technique-txt2img');
+    if (txt2imgRadio) txt2imgRadio.checked = true;
+
+    const selectedContainer = document.getElementById('ch-selected-image-tools');
+    const allContainer = document.getElementById('ch-all-image-tools');
+    if (!selectedContainer || !allContainer) return;
+    
+    selectedContainer.innerHTML = '';
+    const preselected = new Set(["ComfyUI"]);
+
+    allContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.checked = preselected.has(cb.dataset.toolName);
+    });
+    
+    const updateImageSummary = () => {
+        selectedContainer.innerHTML = '';
+        const checkedInMainList = allContainer.querySelectorAll('input:checked');
+        checkedInMainList.forEach(cb => {
+            const el = createToolCheckbox(cb.dataset.toolName, 'image-summary');
+            el.querySelector('input').checked = true;
+            el.addEventListener('change', (e) => {
+                const masterCb = allContainer.querySelector(`input[data-tool-name="${cb.dataset.toolName}"]`);
+                if (masterCb) masterCb.checked = false;
+                updateImageSummary();
+            });
+            selectedContainer.appendChild(el);
+        });
+    };
+
+    allContainer.addEventListener('change', updateImageSummary);
+    updateImageSummary();    
+
+    // Make sure the section is visible
     const imageSection = document.getElementById('ch-image-section');
     if (imageSection) imageSection.style.display = 'block';
 }
@@ -938,7 +1139,7 @@ function readImageMetadata(file) {
                     }
                     return null;
                 };
-                
+
                 // Function to trace back and find all *active* LoRAs
                 const findAllUpstreamLoras = (startNode) => {
                     const loras = [];
@@ -953,7 +1154,7 @@ function readImageMetadata(file) {
                             }
                             currentNode = modelInputNode;
                         } else {
-                           break;
+                            break;
                         }
                     }
                     return loras;
@@ -969,18 +1170,18 @@ function readImageMetadata(file) {
                     resolve(null);
                     return;
                 }
-                
+
                 const ksamplerInputs = ksamplerNode.inputs;
 
                 const posPromptNodeKey = ksamplerInputs.positive[0];
                 const negPromptNodeKey = ksamplerInputs.negative[0];
                 const positive_prompt = workflow[posPromptNodeKey]?.inputs.text || '';
                 const negative_prompt = workflow[negPromptNodeKey]?.inputs.text || '';
-                
+
                 // Trace back to find the base model
                 let baseModelNode = null;
                 let currentNodeToCheck = ksamplerNode;
-                while(currentNodeToCheck && currentNodeToCheck.inputs && currentNodeToCheck.inputs.model) {
+                while (currentNodeToCheck && currentNodeToCheck.inputs && currentNodeToCheck.inputs.model) {
                     const modelInputNodeId = currentNodeToCheck.inputs.model[0];
                     const modelInputNode = workflow[modelInputNodeId];
                     if (modelInputNode.class_type === 'CheckpointLoaderSimple') {
@@ -989,9 +1190,9 @@ function readImageMetadata(file) {
                     }
                     currentNodeToCheck = modelInputNode;
                 }
-                
+
                 const base_model = baseModelNode ? baseModelNode.inputs.ckpt_name : null;
-                
+
                 // Find all LoRAs by tracing back the model connections
                 const loras = findAllUpstreamLoras(ksamplerNode);
 
@@ -1004,7 +1205,7 @@ function readImageMetadata(file) {
                     cfg: ksamplerInputs.cfg,
                     seed: ksamplerInputs.seed,
                     base_model: base_model,
-                    loras: loras.reverse(), 
+                    loras: loras.reverse(),
                 };
 
                 console.log("✅ Successfully parsed PNG workflow:", parsedData);
@@ -2117,36 +2318,33 @@ videoInput.addEventListener('change', async () => {
 });
 
 imageInput.addEventListener('change', async () => {
-    // Get the selected file
     imageToUpload = imageInput.files.length > 0 ? imageInput.files[0] : null;
-    checkUploadability(); // Update the main "Upload" button state
-    
+    checkUploadability();
+
     const imageSection = document.getElementById('ch-image-section');
 
     if (imageToUpload) {
-        // We have a file, so show the image section
-        if (imageSection) imageSection.style.display = 'block';
-        
+        if (!metadataModal) createMetadataModal();
         try {
             updateStatus("⏳ Reading image metadata...");
-            // Call our new, working function to get the data
-            const metadata = await readImageMetadata(imageToUpload);
-            
+            const metadata = await readImageMetadata(imageToUpload); // Your great parser
+
             if (metadata) {
-                // If we got data, populate the UI with it
-                populateImageModalData(metadata);
+                // This single call now handles everything for the image section
+                await populateImageModalData(metadata);
                 updateStatus("✅ Image metadata parsed.");
             } else {
-                // If no metadata, let the user know
+                if (imageSection) imageSection.style.display = 'block';
                 updateStatus("ℹ️ No generation metadata found in image.");
             }
         } catch (error) {
             console.error("Error processing image metadata:", error);
+            if (imageSection) imageSection.style.display = 'block';
             updateStatus("❌ Failed to read image metadata.", true);
         }
     } else {
         if (imageSection) imageSection.style.display = 'none';
-        updateStatus(""); // Clear the status
+        updateStatus("");
     }
 });
 
