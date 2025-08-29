@@ -298,7 +298,7 @@ async function populateModalWithData(data) {
         });
         selectedToolsContainer.appendChild(checkboxElement);
     });
-    
+
     // Step 4: Prefill the technique radio buttons
     if (data && data.technique) {
         const techniqueFromData = data.technique.toLowerCase();
@@ -364,9 +364,19 @@ function createMetadataModal() {
     const modalContainer = document.createElement('div');
     Object.assign(modalContainer.style, {
         backgroundColor: '#34495e88', padding: '20px', borderRadius: '8px',
-        width: '900px', maxHeight: '90vh', overflowY: 'auto', color: 'white'
+        width: '900px', maxHeight: '90vh', overflowY: 'auto', color: 'white',
+        display: 'flex',
+        flexDirection: 'column'
     });
     modalOverlay.appendChild(modalContainer);
+
+    const scrollableContent = document.createElement('div');
+    Object.assign(scrollableContent.style, {
+        overflowY: 'auto', 
+        flexGrow: '1',     
+        paddingRight: '10px' 
+    });
+    modalContainer.appendChild(scrollableContent);    
 
     // --- Video Section (Prompt, Seed, etc.) ---
     const videoSection = document.createElement('div');
@@ -377,9 +387,9 @@ function createMetadataModal() {
     videoSection.appendChild(createInputRow('Steps:', createNumberInput('ch-video-steps')));
     videoSection.appendChild(createInputRow('Sampler:', createTextInput('ch-video-sampler')));
     videoSection.appendChild(createInputRow('Seed:', createNumberInput('ch-video-seed')));
-    modalContainer.appendChild(videoSection);
+    scrollableContent.appendChild(videoSection);
 
-    // --- NEW: Resources Section ---
+    // --- Resources Section ---
     const resourcesSection = document.createElement('div');
     resourcesSection.innerHTML = `<h3 style="margin-top: 20px; border-top: 1px solid #555; padding-top: 15px;">Resources</h3>`;
 
@@ -404,14 +414,15 @@ function createMetadataModal() {
     addResourceButton.id = 'ch-add-resource-btn';
     addResourceButton.textContent = 'Add more loras';
     addResourceButton.style.marginTop = '10px';
-    resourcesSection.appendChild(addResourceButton);
-    modalContainer.appendChild(resourcesSection);
     addResourceButton.style.padding = '5px 10px';
     addResourceButton.style.border = '1px solid #777';
     addResourceButton.style.borderRadius = '4px';
     addResourceButton.style.backgroundColor = '#5f6a78';
     addResourceButton.style.color = 'white';
     addResourceButton.style.cursor = 'pointer';
+
+    resourcesSection.appendChild(addResourceButton);
+    scrollableContent.appendChild(resourcesSection);
 
 
     // --- Tools Section ---
@@ -472,7 +483,7 @@ function createMetadataModal() {
         showAllToolsBtn.textContent = isHidden ? 'Hide All Tools ▲' : 'Show All Tools ▼';
     });
 
-    modalContainer.appendChild(toolsSection);
+    scrollableContent.appendChild(toolsSection);
 
     // Video techniques
     const techniquesContainer = document.createElement('div');
@@ -510,18 +521,18 @@ function createMetadataModal() {
     });
 
     techniquesContainer.appendChild(radioGroup);
-    modalContainer.appendChild(techniquesContainer);
+    scrollableContent.appendChild(techniquesContainer);
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
+
+
+
+
+
+
+
+
+
     // --- Image Section (if an image is to be uploaded) ---
 
     const imageSection = document.createElement('div');
@@ -531,7 +542,7 @@ function createMetadataModal() {
     imageSection.appendChild(createInputRow('Resources (;):', createTextInput('ch-image-resources')));
     imageSection.appendChild(createInputRow('Tools (;):', createTextInput('ch-image-tools')));
     imageSection.appendChild(createInputRow('Techniques (;):', createTextInput('ch-image-techniques')));
-    modalContainer.appendChild(imageSection);
+    scrollableContent.appendChild(imageSection);
 
 
     // --- Actions & Settings Link ---
@@ -542,6 +553,7 @@ function createMetadataModal() {
     footer.style.marginTop = '20px';
     footer.style.paddingTop = '15px';
     footer.style.borderTop = '1px solid #555';
+    footer.style.flexShrink = '0';
 
     // This div will group the status and the button on the right side
     const rightFooter = document.createElement('div');
@@ -730,7 +742,7 @@ async function handleStartButtonClick() {
                         techniqueSuccess = true;
                         break;
                     }
-                    
+
                     console.log(`Attempt ${attempt}/${MAX_ATTEMPTS} to add technique "${selectedTechnique}"`);
                     await addTechnique(selectedTechnique);
                     await waitForTechniqueAdded(selectedTechnique);
@@ -799,18 +811,18 @@ async function handleStartButtonClick() {
  */
 async function addTechnique(techniqueName) {
     if (!videoContainerElement) throw new Error("Video container element not found.");
-    
+
     // 1. Find and click the "TECHNIQUE" button.
     console.log("Finding 'TECHNIQUE' button...");
     const header = Array.from(videoContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Techniques');
     if (!header) throw new Error("Could not find the 'Techniques' heading.");
-    
+
     // The button is in a sibling div to the header's container.
     const buttonContainer = header.parentElement.nextElementSibling;
     if (!buttonContainer) throw new Error("Could not find container for 'TECHNIQUE' button.");
     const addButton = Array.from(buttonContainer.querySelectorAll('button')).find(b => b.innerText.trim() === 'TECHNIQUE');
     if (!addButton) throw new Error("Could not find the 'TECHNIQUE' button.");
-    
+
     addButton.click();
     console.log("✅ Clicked 'TECHNIQUE' button.");
 
@@ -822,7 +834,7 @@ async function addTechnique(techniqueName) {
     // 3. Find and click the correct option. The text is in a direct child span.
     const allOptions = popover.querySelectorAll('div[role="option"]');
     const targetOption = Array.from(allOptions).find(opt => opt.querySelector('span')?.textContent.trim().toLowerCase() === techniqueName.toLowerCase());
-    
+
     if (targetOption) {
         console.log(`Found technique "${techniqueName}". Clicking it.`);
         simulateMouseClick(targetOption);
@@ -835,10 +847,10 @@ async function addTechnique(techniqueName) {
     // 4. Find the "Add" button that has appeared and click it.
     const saveButton = Array.from(popover.querySelectorAll('button')).find(b => b.textContent.trim() === 'Add');
     if (!saveButton) throw new Error("Could not find the 'Add' button in the techniques popover.");
-    
+
     console.log("😡 Found 'Add' button. Clicking it.");
     saveButton.click();
-    
+
     // 5. Wait for the popover to disappear.
     await waitForElementToDisappear(popoverSelector, 3000);
     console.log("✅ Techniques popover has closed.");
