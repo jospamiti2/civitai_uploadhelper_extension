@@ -73,7 +73,7 @@ const ALL_CIVITAI_TOOLS = [
     "Lambda Labs", "Nebius", "RunPod", "ThinkDiffusion", "Salad", "fal", "Brev", "RunDiffusion", "MAGNIFIC", "Topaz Photo AI", "Topaz Video AI", "Adobe AfterEffects", "Adobe Photoshop", "Adobe Premiere", "CapCut", "ChatGPT", "DaVinci Resolve", "Final Cut Pro", "Flimora ", "GIMP", "Hitfilm", "Magix Video", "Picsart", "Veed.io", "VSDC", "Wondershare ", "Blender", "Unity", "Unreal Engine", "Grok", "Live Portrait", "MimicMotion"
 ];
 
-
+const VIDEO_TECHNIQUES = ["img2vid", "vid2vid", "txt2vid"];
 
 // --- UI CREATION ---
 const banner = document.createElement('div');
@@ -258,13 +258,13 @@ async function populateModalWithData(data) {
     // --- Pre-fill and Display Video Tools ---
     const selectedToolsContainer = document.getElementById('ch-selected-video-tools');
     const allToolsContainer = document.getElementById('ch-all-video-tools');
-    
+
     // Ensure containers exist before proceeding
     if (!selectedToolsContainer || !allToolsContainer) {
         console.error("Tool containers not found in the modal.");
         return;
     }
-    
+
     selectedToolsContainer.innerHTML = ''; // Clear any previous summary
 
     // Step 1: Determine the set of pre-selected tools
@@ -298,8 +298,21 @@ async function populateModalWithData(data) {
         });
         selectedToolsContainer.appendChild(checkboxElement);
     });
-
+    
+    // Step 4: Prefill the technique radio buttons
+    if (data && data.technique) {
+        const techniqueFromData = data.technique.toLowerCase();
+        // Find the radio button corresponding to the technique
+        const radioToSelect = document.getElementById(`ch-technique-${techniqueFromData}`);
+        if (radioToSelect) {
+            radioToSelect.checked = true;
+            console.log(`Pre-selected technique: ${techniqueFromData}`);
+        } else {
+            console.warn(`Technique "${techniqueFromData}" from metadata is not a known option.`);
+        }
+    }
 }
+
 function clearModalFields() {
     const idsToClear = [
         'ch-video-prompt', 'ch-video-neg-prompt', 'ch-video-guidance',
@@ -403,7 +416,7 @@ function createMetadataModal() {
 
     // --- Tools Section ---
     const toolsSection = document.createElement('div');
-    toolsSection.id = 'ch-video-tools-section'; 
+    toolsSection.id = 'ch-video-tools-section';
     toolsSection.innerHTML = '<h3 style="margin-top: 20px; border-top: 1px solid #555; padding-top: 15px;">Video Tools</h3>';
 
     // Container for the pre-selected tools summary
@@ -432,9 +445,9 @@ function createMetadataModal() {
 
     // Container for the comprehensive list of all tools (initially hidden)
     const allToolsContainer = document.createElement('div');
-    allToolsContainer.id = 'ch-all-video-tools'; 
+    allToolsContainer.id = 'ch-all-video-tools';
     Object.assign(allToolsContainer.style, {
-        display: 'none', 
+        display: 'none',
         marginTop: '15px',
         flexWrap: 'wrap',
         gap: '10px 15px',
@@ -444,7 +457,7 @@ function createMetadataModal() {
         padding: '10px',
         borderRadius: '5px'
     });
-    
+
     // Populate the comprehensive list with checkboxes
     ALL_CIVITAI_TOOLS.forEach(toolName => {
         allToolsContainer.appendChild(createToolCheckbox(toolName, 'video'));
@@ -460,6 +473,56 @@ function createMetadataModal() {
     });
 
     modalContainer.appendChild(toolsSection);
+
+    // Video techniques
+    const techniquesContainer = document.createElement('div');
+    techniquesContainer.style.display = 'flex';
+    techniquesContainer.style.alignItems = 'center';
+    techniquesContainer.style.marginBottom = '10px';
+
+    const techniquesLabel = document.createElement('label');
+    techniquesLabel.textContent = 'Technique:';
+    techniquesLabel.style.width = '150px';
+    techniquesLabel.style.flexShrink = '0';
+    techniquesContainer.appendChild(techniquesLabel);
+
+    const radioGroup = document.createElement('div');
+    radioGroup.style.display = 'flex';
+    radioGroup.style.gap = '15px';
+
+    VIDEO_TECHNIQUES.forEach(technique => {
+        const radioContainer = document.createElement('div');
+        const radioInput = document.createElement('input');
+        radioInput.type = 'radio';
+        radioInput.name = 'ch-video-technique'; // Same name groups them
+        radioInput.id = `ch-technique-${technique}`;
+        radioInput.value = technique;
+
+        const radioLabel = document.createElement('label');
+        radioLabel.htmlFor = radioInput.id;
+        radioLabel.textContent = technique.toUpperCase();
+        radioLabel.style.marginLeft = '5px';
+        radioLabel.style.cursor = 'pointer';
+
+        radioContainer.appendChild(radioInput);
+        radioContainer.appendChild(radioLabel);
+        radioGroup.appendChild(radioContainer);
+    });
+
+    techniquesContainer.appendChild(radioGroup);
+    modalContainer.appendChild(techniquesContainer);
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    // --- Image Section (if an image is to be uploaded) ---
 
     const imageSection = document.createElement('div');
     imageSection.id = 'ch-image-section';
@@ -651,7 +714,44 @@ async function handleStartButtonClick() {
             }
         } else {
             console.log("No video tools to add.");
-        }     
+        }
+
+        const selectedTechnique = document.querySelector('input[name="ch-video-technique"]:checked')?.value;
+        if (selectedTechnique) {
+            updateStatus(`⏳ Adding technique: ${selectedTechnique}...`);
+            let techniqueSuccess = false;
+            const MAX_ATTEMPTS = 3;
+            for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+                try {
+                    // Check if it's already there first
+                    const header = Array.from(videoContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Techniques');
+                    if (header && header.parentElement.parentElement.innerText.includes(selectedTechnique)) {
+                        console.log(`Technique "${selectedTechnique}" is already present.`);
+                        techniqueSuccess = true;
+                        break;
+                    }
+                    
+                    console.log(`Attempt ${attempt}/${MAX_ATTEMPTS} to add technique "${selectedTechnique}"`);
+                    await addTechnique(selectedTechnique);
+                    await waitForTechniqueAdded(selectedTechnique);
+                    techniqueSuccess = true;
+                    console.log("✅ Technique successfully added and verified.");
+                    break;
+                } catch (error) {
+                    console.error(`Attempt ${attempt} to add technique failed: ${error.message}`);
+                    if (attempt < MAX_ATTEMPTS) {
+                        console.log("😡 EAT THIS! AGAIN!");
+                    }
+                }
+            }
+            if (!techniqueSuccess) {
+                updateStatus(`❌ Failed to add technique. CONTINUING.`, true);
+                await new Promise(r => setTimeout(r, 1500));
+            }
+        } else {
+            console.log("No technique selected to add.");
+        }
+
 
         updateStatus("✅ All tasks complete!");
         updateStatus("Angry Helper has finished all automated tasks!");
@@ -692,6 +792,92 @@ async function handleStartButtonClick() {
 
 
 // --- LOGIC ---
+
+/**
+ * Automates adding a single Technique to the post. This is a single-select action.
+ * @param {string} techniqueName The name of the technique to select (e.g., "img2vid").
+ */
+async function addTechnique(techniqueName) {
+    if (!videoContainerElement) throw new Error("Video container element not found.");
+    
+    // 1. Find and click the "TECHNIQUE" button.
+    console.log("Finding 'TECHNIQUE' button...");
+    const header = Array.from(videoContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Techniques');
+    if (!header) throw new Error("Could not find the 'Techniques' heading.");
+    
+    // The button is in a sibling div to the header's container.
+    const buttonContainer = header.parentElement.nextElementSibling;
+    if (!buttonContainer) throw new Error("Could not find container for 'TECHNIQUE' button.");
+    const addButton = Array.from(buttonContainer.querySelectorAll('button')).find(b => b.innerText.trim() === 'TECHNIQUE');
+    if (!addButton) throw new Error("Could not find the 'TECHNIQUE' button.");
+    
+    addButton.click();
+    console.log("✅ Clicked 'TECHNIQUE' button.");
+
+    // 2. Wait for the popover to appear.
+    const popoverSelector = 'div[id^="headlessui-popover-panel-"]';
+    const popover = await waitForInteractiveElement(popoverSelector, 5000);
+    console.log("✅ Techniques popover is visible.");
+
+    // 3. Find and click the correct option. The text is in a direct child span.
+    const allOptions = popover.querySelectorAll('div[role="option"]');
+    const targetOption = Array.from(allOptions).find(opt => opt.querySelector('span')?.textContent.trim().toLowerCase() === techniqueName.toLowerCase());
+    
+    if (targetOption) {
+        console.log(`Found technique "${techniqueName}". Clicking it.`);
+        simulateMouseClick(targetOption);
+        await new Promise(r => setTimeout(r, 200)); // Brief pause for state to update
+    } else {
+        addButton.click(); // Close the popover to avoid getting stuck
+        throw new Error(`Could not find the technique option for "${techniqueName}"`);
+    }
+
+    // 4. Find the "Add" button that has appeared and click it.
+    const saveButton = Array.from(popover.querySelectorAll('button')).find(b => b.textContent.trim() === 'Add');
+    if (!saveButton) throw new Error("Could not find the 'Add' button in the techniques popover.");
+    
+    console.log("😡 Found 'Add' button. Clicking it.");
+    saveButton.click();
+    
+    // 5. Wait for the popover to disappear.
+    await waitForElementToDisappear(popoverSelector, 3000);
+    console.log("✅ Techniques popover has closed.");
+}
+
+/**
+ * Waits and polls the page to verify that a technique has been added.
+ * @param {string} techniqueName The name of the technique to look for.
+ * @returns {Promise<true>}
+ */
+function waitForTechniqueAdded(techniqueName) {
+    return new Promise((resolve, reject) => {
+        const timeout = 5000;
+        const checkInterval = 250;
+        const timeoutId = setTimeout(() => {
+            clearInterval(intervalId);
+            reject(new Error(`Verification Timeout: Technique "${techniqueName}" did not appear on the page within ${timeout}ms.`));
+        }, timeout);
+
+        const intervalId = setInterval(() => {
+            if (!videoContainerElement) return;
+            const header = Array.from(videoContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Techniques');
+            if (!header) return;
+
+            const container = header.parentElement.parentElement.parentElement;
+            if (!container) return;
+
+            // Find all spans inside list items. This is robust.
+            const addedElements = container.querySelectorAll('li span');
+            const isPresent = Array.from(addedElements).some(span => span.textContent.trim().toLowerCase() === techniqueName.toLowerCase());
+
+            if (isPresent) {
+                clearInterval(intervalId);
+                clearTimeout(timeoutId);
+                resolve(true);
+            }
+        }, checkInterval);
+    });
+}
 
 
 /**
@@ -790,11 +976,11 @@ function getVideoToolDataFromModal() {
     const tools = [];
     // The master list of all checkboxes is the single source of truth.
     const container = document.getElementById('ch-all-video-tools');
-    
+
     if (container) {
         // Find all checkboxes that are currently checked.
         const checkedBoxes = container.querySelectorAll('input[type="checkbox"]:checked');
-        
+
         // Extract the tool name from the 'data-tool-name' attribute of each checked box.
         checkedBoxes.forEach(cb => {
             tools.push(cb.dataset.toolName);
@@ -802,7 +988,7 @@ function getVideoToolDataFromModal() {
     } else {
         console.error("Could not find the video tools container ('ch-all-video-tools') to read data from.");
     }
-    
+
     console.log("Gathered selected video tools for processing:", tools);
     return tools;
 }
@@ -817,7 +1003,7 @@ function createToolCheckbox(toolName, prefix) {
     const container = document.createElement('div');
     // Sanitize the tool name to create a valid ID
     const safeIdName = toolName.replace(/[^a-zA-Z0-9]/g, '');
-    
+
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.id = `ch-tool-${prefix}-${safeIdName}`;
@@ -844,7 +1030,7 @@ function createToolCheckbox(toolName, prefix) {
 async function addToolsFromList(toolList) {
     if (!videoContainerElement) throw new Error("Video container element not found.");
     if (toolList.length === 0) return;
-    
+
     // 1. Find the "TOOL" button specifically in the "Tools" section. No variables.
     console.log("Finding 'TOOL' button...");
     const toolHeader = Array.from(videoContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Tools');
@@ -854,7 +1040,7 @@ async function addToolsFromList(toolList) {
     if (!addButtonContainer) throw new Error("Could not find the container for the 'TOOL' button.");
     const addToolButton = Array.from(addButtonContainer.querySelectorAll('button')).find(b => b.innerText.trim() === 'TOOL');
     if (!addToolButton) throw new Error("Could not find the 'TOOL' button.");
-    
+
     addToolButton.click();
     console.log("✅ Clicked 'TOOL' button.");
 
@@ -883,14 +1069,14 @@ async function addToolsFromList(toolList) {
         if (targetOption) {
             // Find the specific checkbox inside the row we found.
             const checkboxInput = targetOption.querySelector('input[type="checkbox"]');
-            
+
             if (checkboxInput) {
                 console.log(`Found "${toolName}". Clicking internal checkbox.`);
-                simulateMouseClick(checkboxInput); 
-                selectedCount++; 
+                simulateMouseClick(checkboxInput);
+                selectedCount++;
                 await new Promise(r => setTimeout(r, 200));
             } else {
-                 console.warn(`Internal error: Checkbox input not found for ${toolName}.`);
+                console.warn(`Internal error: Checkbox input not found for ${toolName}.`);
             }
         } else {
             console.warn(`Could not find tool "${toolName}" in the list. Skipping.`);
@@ -920,7 +1106,7 @@ async function addToolsFromList(toolList) {
 
     // 6. Verification
     console.log("Verifying that tools were added...");
-    await new Promise(r => setTimeout(r, 500)); 
+    await new Promise(r => setTimeout(r, 500));
 
     // This is the container for the whole "Tools" section
     const toolsSectionContainer = toolHeader.parentElement.parentElement.parentElement;
@@ -966,11 +1152,11 @@ function updateStatus(message, isError = false) {
 function getLoraDataFromModal() {
     const loras = [];
     const rows = document.querySelectorAll('#ch-recognized-loras .lora-item, #ch-unrecognized-loras .lora-item');
-    
+
     rows.forEach(row => {
         const titleInput = row.querySelector('.title');
         const versionInput = row.querySelector('.version');
-        
+
         // Only add loras that have a title to search for
         if (titleInput && versionInput && titleInput.value.trim() !== '') {
             loras.push({
@@ -999,10 +1185,10 @@ function verifyResourceAdded(resourceName) {
 
     // Find all the links for added resources
     const resourceLinks = resourceHeader.parentElement.parentElement.parentElement.querySelectorAll('a');
-    
+
     // Check if any of them contain our resource name
     const found = Array.from(resourceLinks).some(link => link.innerText.trim().startsWith(resourceName));
-    
+
     return found;
 }
 
@@ -1111,8 +1297,8 @@ async function addResourcesFromList(loraList) {
                 }
                 if (attempt === MAX_ATTEMPTS) {
                     updateStatus(`❌ Failed to add "${lora.title}". Continuing anyway.`, true);
-                    await new Promise(r => setTimeout(r, 2000)); 
-                }                
+                    await new Promise(r => setTimeout(r, 2000));
+                }
             }
             if (attempt < MAX_ATTEMPTS) console.log("TRYING AGAIN!");
         }
@@ -1139,7 +1325,7 @@ async function addSingleResource(resourceName, resourceVersion) {
     // Now, find the 'RESOURCE' button within that correct container
     const allButtons = Array.from(resourceContainer.querySelectorAll('button'));
     const addResourceButton = allButtons.find(b => b.innerText.trim() === 'RESOURCE');
-        addResourceButton.click();
+    addResourceButton.click();
 
     // 2. Wait for the resource selection modal to appear and be ready
     console.log("Waiting for resource modal...");
@@ -1165,11 +1351,11 @@ async function addSingleResource(resourceName, resourceVersion) {
     for (const card of cards) {
         // Find the specific paragraph element that is the title.
         const titleElement = card.querySelector('p[data-line-clamp="true"]');
-        
+
         // Check if we found the title and if its text matches.
         if (titleElement && titleElement.textContent.trim().startsWith(resourceName)) {
             targetCard = card;
-            break; 
+            break;
         }
     }
     if (!targetCard) throw new Error(`Could not find a card with the exact title "${resourceName}".`);
@@ -1189,7 +1375,7 @@ async function addSingleResource(resourceName, resourceVersion) {
 
             // Wait for the version dropdown to appear
             const versionDropdown = await waitForInteractiveElement('div.mantine-Select-dropdown', 5000);
-            
+
             // Find the specific version option inside the dropdown
             const allVersionOptions = versionDropdown.querySelectorAll('div[data-combobox-option]');
             const targetVersionOption = Array.from(allVersionOptions).find(opt => opt.querySelector('span')?.textContent.trim() === resourceVersion.trim());
@@ -1206,15 +1392,15 @@ async function addSingleResource(resourceName, resourceVersion) {
                 await waitForElementToDisappear('div.mantine-Select-dropdown', 3000);
             }
         }
-    }    
-    
+    }
+
     const selectButton = Array.from(targetCard.querySelectorAll('button')).find(b => b.textContent === 'Select');
     if (!selectButton) throw new Error("Could not find 'Select' button on the resource card.");
 
     // 6. Click "Select" and then close the modal
     console.log("Clicking 'Select' button...");
     selectButton.click();
-    
+
     // The modal closes itself on selection. We just need to wait for it.
     await waitForModalToDisappearByText("Select resource(s)", 5000);
     console.log("✅ Resource modal has closed.");
