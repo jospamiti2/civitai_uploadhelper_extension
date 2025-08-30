@@ -810,7 +810,7 @@ async function handleStartButtonClick() {
         const loras = getLoraDataFromModal();
         if (loras.length > 0) {
             updateStatus(`Adding ${loras.length} resources...`);
-            await addResourcesFromList(loras);
+            await addResourcesFromList(loras, videoContainerElement);
             updateStatus("✅ All resources added.");
         } else {
             console.log("No LoRAs to add.");
@@ -883,8 +883,10 @@ async function handleStartButtonClick() {
 
         // Image tasks (if applicable)
         if (imageToUpload && imageContainerElement) {
-            updateStatus("⏳ Filling image metadata...");
-            await initiateImageMetadataFill(); 
+            const imageLoras = getImageLoraDataFromModal(); 
+            if (imageLoras.length > 0) {
+                await addResourcesFromList(imageLoras, imageContainerElement);
+            }
         }
 
 
@@ -929,86 +931,27 @@ async function handleStartButtonClick() {
 // --- LOGIC ---
 
 /**
- * Finds and fills the metadata (prompt, sampler, etc.) for the IMAGE section.
+ * Reads all LoRA data from the dedicated IMAGE resource section of the modal.
+ * @returns {Array<{title: string, version: string}>}
  */
-async function initiateImageMetadataFill() {
-    console.log("🚀 Starting IMAGE metadata fill...");
-
-    if (!imageContainerElement) {
-        throw new Error("Cannot fill image metadata: image container element not found on page.");
-    }
-
-    // --- Find the 'Prompt' heading and 'EDIT' button within the IMAGE container ---
-    const h3Elements = imageContainerElement.querySelectorAll('h3');
-    const promptHeader = Array.from(h3Elements).find(h => h.textContent.trim() === 'Prompt');
-    if (!promptHeader) throw new Error("Could not find 'Prompt' heading in image container.");
-
-    const parentDiv = promptHeader.parentElement;
-    const editButton = parentDiv.querySelector('button');
-    if (!editButton || !editButton.textContent.includes('EDIT')) {
-        throw new Error("Could not find 'EDIT' button in image container.");
-    }
+function getImageLoraDataFromModal() {
+    const loras = [];
+    // These are the correct IDs for the UI we built for the image section
+    const rows = document.querySelectorAll('#ch-image-recognized-loras .lora-item, #ch-image-unrecognized-loras .lora-item');
     
-    console.log("✅ Found image 'EDIT' button. Clicking it.");
-    editButton.click();
-
-    // --- Wait for the modal and fill the data ---
-    const modalContentSelector = 'section.mantine-Modal-content';
-    const modal = await waitForInteractiveElement(modalContentSelector, 5000);
-    console.log("✅ Image metadata modal is open and interactive.");
-    
-    try {
-        // Get the data from our extension's IMAGE UI fields
-        const data = {
-            prompt: document.getElementById('ch-image-prompt').value,
-            negativePrompt: document.getElementById('ch-image-neg-prompt').value,
-            cfg: document.getElementById('ch-image-guidance').value,
-            steps: document.getElementById('ch-image-steps').value,
-            sampler: document.getElementById('ch-image-sampler').value,
-            seed: document.getElementById('ch-image-seed').value
-        };
-        console.log("📝 Data to fill for image:", data);
-
-        // Fill the simple fields
-        setInputValue(modal.querySelector('#input_prompt'), data.prompt);
-        setInputValue(modal.querySelector('#input_negativePrompt'), data.negativePrompt);
-        setInputValue(modal.querySelector('#input_cfgScale'), data.cfg);
-        setInputValue(modal.querySelector('#input_steps'), data.steps);
-        setInputValue(modal.querySelector('#input_seed'), data.seed);
-
-        // The image sampler uses the same buggy component as the video one
-        const civitaiSampler = SAMPLER_MAP[data.sampler.trim().toLowerCase()] || data.sampler;
-        await selectSampler(modal, civitaiSampler); 
-
-        // Handle save
-        const saveButton = Array.from(modal.querySelectorAll('button')).find(b => b.textContent === 'Save');
-        if (!saveButton) throw new Error("Could not find the 'Save' button.");
-        const modalTitle = modal.querySelector('.mantine-Modal-title');
-        if (modalTitle) modalTitle.click();
-        await new Promise(r => setTimeout(r, 100));
-        saveButton.click();
+    rows.forEach(row => {
+        const titleInput = row.querySelector('.title');
+        const versionInput = row.querySelector('.version');
         
-        await waitForElementToDisappear(modalContentSelector, 5000);
-        console.log("🎉 Image metadata modal filled and closed successfully!");
-
-    } catch (error) {
-        // If something goes wrong, try to close the modal gracefully before re-throwing
-        const closeButton = modal.querySelector('button.mantine-Modal-close');
-        if (closeButton) closeButton.click();
-        // Re-throw the error so the main orchestrator can catch it
-        throw new Error(`Failed during image metadata fill: ${error.message}`);
-    }
-}
-
-
-function getImageToolDataFromModal() {
-    const tools = [];
-    const container = document.getElementById('ch-all-image-tools');
-    if (container) {
-        const checkedBoxes = container.querySelectorAll('input[type="checkbox"]:checked');
-        checkedBoxes.forEach(cb => tools.push(cb.dataset.toolName));
-    }
-    return tools;
+        if (titleInput && versionInput && titleInput.value.trim() !== '') {
+            loras.push({
+                title: titleInput.value.trim(),
+                version: versionInput.value.trim()
+            });
+        }
+    });
+    console.log("Found Image LoRAs to add from modal:", loras);
+    return loras;
 }
 
 
@@ -1238,9 +1181,38 @@ function readImageMetadata(file) {
                 };
 
                 // Trace back from SaveImage to find the KSampler
+                console.log("Tracing back from SaveImage node:", saveImageNodeId);
                 const vaeDecodeNodeId = workflow[saveImageNodeId].inputs.images[0];
-                const ksamplerNodeId = workflow[vaeDecodeNodeId].inputs.samples[0];
+                let ksamplerNodeId = null;
+                if (workflow[vaeDecodeNodeId].class_type !== 'VAEDecode') {
+                    const parentOfVaeDecode = workflow[vaeDecodeNodeId];
+                    const parentOfVaeDecideInputImage = parentOfVaeDecode.inputs?.image[0];
+                    const parentOfVaeDecideInputImageNode = workflow[parentOfVaeDecideInputImage];
+                    if (parentOfVaeDecideInputImageNode && parentOfVaeDecideInputImageNode.class_type == 'VAEDecode') {
+                        if (parentOfVaeDecideInputImageNode.inputs && parentOfVaeDecideInputImageNode.inputs.samples) {
+                            if (parentOfVaeDecideInputImageNode.inputs.samples.length > 0) {
+                                if ( workflow[parentOfVaeDecideInputImageNode.inputs.samples[0]].class_type === 'KSampler') {
+                                    console.log("Found KSampler node via VAEDecode image input:", parentOfVaeDecideInputImageNode.inputs.samples[0]);
+                                    ksamplerNodeId = parentOfVaeDecideInputImageNode.inputs.samples[0];
+                                }
+                            }
+                        }
+                    } else {
+                        console.log("Could not trace back to a VAEDecode node.");  
+                        resolve(null);
+                        return;
+                    }
+                } else {
+                    ksamplerNodeId = workflow[vaeDecodeNodeId].inputs.samples[0];
+                    console.log("Found KSampler node:", ksamplerNodeId);
+                }
+                if (!ksamplerNodeId == null) {  
+                    console.log("KSampler node ID is null.");
+                    resolve(null);
+                    return;
+                }
                 const ksamplerNode = workflow[ksamplerNodeId];
+                console.log("KSampler node details:", ksamplerNode);
 
                 if (ksamplerNode.class_type !== 'KSampler') {
                     console.log("Could not trace back to a KSampler node.");
@@ -1250,16 +1222,23 @@ function readImageMetadata(file) {
 
                 const ksamplerInputs = ksamplerNode.inputs;
 
+                console.log("KSampler inputs:", ksamplerInputs);
                 const posPromptNodeKey = ksamplerInputs.positive[0];
+                console.log("Positive prompt node key:", posPromptNodeKey);
                 const negPromptNodeKey = ksamplerInputs.negative[0];
+                console.log("Negative prompt node key:", negPromptNodeKey);
                 const positive_prompt = workflow[posPromptNodeKey]?.inputs.text || '';
+                console.log("Extracted positive prompt:", positive_prompt);
                 const negative_prompt = workflow[negPromptNodeKey]?.inputs.text || '';
+                console.log("Extracted negative prompt:", negative_prompt);
 
                 // Trace back to find the base model
                 let baseModelNode = null;
                 let currentNodeToCheck = ksamplerNode;
                 while (currentNodeToCheck && currentNodeToCheck.inputs && currentNodeToCheck.inputs.model) {
+                    console.log("Checking node for base model:", currentNodeToCheck);
                     const modelInputNodeId = currentNodeToCheck.inputs.model[0];
+                    console.log("Model input node ID:", modelInputNodeId);
                     const modelInputNode = workflow[modelInputNodeId];
                     if (modelInputNode.class_type === 'CheckpointLoaderSimple') {
                         baseModelNode = modelInputNode;
@@ -1392,7 +1371,7 @@ function waitForTechniqueAdded(techniqueName) {
  * @param {number} timeout The total time to wait in milliseconds.
  * @returns {Promise<boolean>} A promise that resolves to true if found, or rejects if it times out.
  */
-function waitForResourceAdded(resourceName, timeout) {
+function waitForResourceAdded(resourceName, timeout, containerElement) {
     return new Promise((resolve, reject) => {
         const checkInterval = 250;
         const timeoutId = setTimeout(() => {
@@ -1401,8 +1380,8 @@ function waitForResourceAdded(resourceName, timeout) {
         }, timeout);
 
         const intervalId = setInterval(() => {
-            if (!videoContainerElement) return;
-            const resourceHeader = Array.from(videoContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Resources');
+            if (!containerElement) return;
+            const resourceHeader = Array.from(containerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Resources');
             if (!resourceHeader) return;
 
             const container = resourceHeader.parentElement.parentElement.parentElement;
@@ -1765,7 +1744,8 @@ function waitForModalWithText(identifyingText, timeout) {
  * Contains the "Angry Helper" retry logic.
  * @param {Array<{title: string, version: string}>} loraList
  */
-async function addResourcesFromList(loraList) {
+async function addResourcesFromList(loraList, containerElement) {
+    if (!containerElement) throw new Error("Container element not provided to addResourcesFromList.");
     console.log(`😡 Angry Helper starting to add ${loraList.length} resources...`);
 
     for (const lora of loraList) {
@@ -1774,7 +1754,7 @@ async function addResourcesFromList(loraList) {
 
         for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             // Check if it's already on the page before we start
-            const resourceLinks = videoContainerElement.querySelectorAll('a');
+            const resourceLinks = containerElement.querySelectorAll('a');
             const alreadyExists = Array.from(resourceLinks).some(link => link.innerText.includes(lora.title));
             if (alreadyExists) {
                 console.log(`Resource "${lora.title}" is already present. Skipping.`);
@@ -1784,8 +1764,8 @@ async function addResourcesFromList(loraList) {
 
             console.log(`Attempt ${attempt}/${MAX_ATTEMPTS} to add resource "${lora.title}"`);
             try {
-                await addSingleResource(lora.title, lora.version);
-                await waitForResourceAdded(lora.title, 5000);
+                await addSingleResource(lora.title, lora.version, containerElement);
+                await waitForResourceAdded(lora.title, 5000, containerElement);
 
                 success = true;
                 console.log(`✅ VERIFIED: "${lora.title}" was successfully added.`);
@@ -1816,12 +1796,12 @@ async function addResourcesFromList(loraList) {
  * @param {string} resourceName The name to search for (e.g., "Detail Tweaker XL").
  * @param {string} resourceVersion The version to select (currently unused, for future).
  */
-async function addSingleResource(resourceName, resourceVersion) {
-    if (!videoContainerElement) throw new Error("Video container element not found.");
+async function addSingleResource(resourceName, resourceVersion, containerElement) {
+    if (!containerElement) throw new Error("Container element not provided to addSingleResource.");
 
     // 1. Find and click the "ADD RESOURCE" button
     console.log(`Finding 'ADD RESOURCE' button...`);
-    const allH3s = Array.from(videoContainerElement.querySelectorAll('h3'));
+    const allH3s = Array.from(containerElement.querySelectorAll('h3'));
     const resourceHeader = allH3s.find(h => h.textContent.trim() === 'Resources');
     if (!resourceHeader) throw new Error("Could not find the 'Resources' heading.");
     // Navigate up two parent elements to find the correct container
@@ -1876,26 +1856,70 @@ async function addSingleResource(resourceName, resourceVersion) {
         if (versionInput.value.trim() === resourceVersion.trim()) {
             console.log(`Version "${resourceVersion}" is already selected. Skipping.`);
         } else {
-            console.log(`Selecting version "${resourceVersion}"...`);
-            versionInput.click();
+            // Step 1: Click to open the dropdown.
+            console.log(`Attempting to open version dropdown for "${resourceVersion}"...`);
+            simulateMouseClick(versionInput);
+            await new Promise(r => setTimeout(r, 100));
 
-            // Wait for the version dropdown to appear
-            const versionDropdown = await waitForInteractiveElement('div.mantine-Select-dropdown', 5000);
+            // Step 2: Get the precise screen position of the input we just clicked.
+            const inputRect = versionInput.getBoundingClientRect();
 
+            // Step 3: Get ALL currently visible dropdowns on the entire page.
+            const allDropdowns = Array.from(document.querySelectorAll('div.mantine-Select-dropdown'))
+                .filter(d => window.getComputedStyle(d).opacity === '1');
+
+            if (allDropdowns.length === 0) throw new Error("No visible version dropdowns found after clicking.");
+
+            // Step 4: Loop through them and find the one that is physically closest to our input.
+            let closestDropdown = null;
+            let minDistance = Infinity;
+
+            for (const dropdown of allDropdowns) {
+                const dropRect = dropdown.getBoundingClientRect();
+                // Calculate the vertical distance between the bottom of the input and the top of the dropdown.
+                const distance = Math.abs(dropRect.top - inputRect.bottom);
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    closestDropdown = dropdown;
+                }
+            }
+            
+            if (!closestDropdown) throw new Error("Could not determine the closest dropdown to the version input.");
+            
+            const versionDropdown = closestDropdown;
+            console.log("✅ Found the correct version dropdown by proximity.");
+
+            // Step 5: Now that we have the correct dropdown, find our specific version and click it.
             // Find the specific version option inside the dropdown
-            const allVersionOptions = versionDropdown.querySelectorAll('div[data-combobox-option]');
-            const targetVersionOption = Array.from(allVersionOptions).find(opt => opt.querySelector('span')?.textContent.trim() === resourceVersion.trim());
+            let targetVersionOption = null;
+            let attempts = 20; // Try for 2 seconds
+            while (attempts > 0) {
+                const allVersionOptions = versionDropdown.querySelectorAll('div[data-combobox-option]');
+                
+                // Find the option where the direct child SPAN's text matches exactly.
+                targetVersionOption = Array.from(allVersionOptions).find(opt => {
+                    const span = opt.querySelector('span');
+                    return span && span.textContent.trim().toLowerCase() === resourceVersion.trim().toLowerCase();
+                });
+
+                if (targetVersionOption) {
+                    console.log(`✅ Found version option "${resourceVersion}" in dropdown.`);
+                    break; 
+                }
+                await new Promise(r => setTimeout(r, 100));
+                attempts--;
+            }
 
             if (targetVersionOption) {
                 console.log(`Found version option. Clicking it.`);
-                targetVersionOption.click();
+                simulateMouseClick(targetVersionOption);
                 // Wait for the dropdown to disappear to confirm selection
-                await waitForElementToDisappear('div.mantine-Select-dropdown', 3000);
+                await new Promise(r => setTimeout(r, 100));
             } else {
                 console.warn(`Could not find version "${resourceVersion}" in the dropdown. The default will be used.`);
                 // Click outside the dropdown to close it gracefully
                 document.body.click();
-                await waitForElementToDisappear('div.mantine-Select-dropdown', 3000);
+                await new Promise(r => setTimeout(r, 100));
             }
         }
     }
@@ -2447,16 +2471,18 @@ async function runUploadOrchestrator() {
     try {
         const dryProgressSelector = 'div.w-full:has(.mantine-Dropzone-root) + div.mantine-Progress-root';
         // --- VIDEO LIFECYCLE ---
+        // Step 1: Upload Video and get the "Grandparent" container
         const videoResult = await manageUploadLifecycle({
             file: videoToUpload,
             name: 'Video',
             progressSelector: dryProgressSelector,
             successSelector: 'video[class*="EdgeMedia_responsive"]'
         });
-        videoContainerElement = videoResult.container;
-        console.log("✅ Video container element captured directly:", videoContainerElement);
+        const grandparentContainer = videoResult.container;
+        console.log("✅ Grandparent container captured.", grandparentContainer);
 
         // --- IMAGE LIFECYCLE (only if an image is provided) ---
+        // Step 2: Upload Image (if provided)
         if (imageToUpload) {
             const imageResult = await manageUploadLifecycle({
                 file: imageToUpload,
@@ -2464,8 +2490,32 @@ async function runUploadOrchestrator() {
                 progressSelector: dryProgressSelector,
                 successSelector: 'img[class*="EdgeImage_image"]'
             });
-            imageContainerElement = imageResult.container;
-            console.log("✅ Image container element captured directly:", imageContainerElement);
+        }
+
+        // Step 3: Find the Content Area.
+        // It's the direct child of the Grandparent that contains the video element.
+        let contentArea = null;
+        for (const child of grandparentContainer.children) {
+            if (child.querySelector('video')) {
+                contentArea = child;
+                break;
+            }
+        }
+        if (!contentArea) throw new Error("FATAL: Could not find the main content area div.");
+        console.log("✅ Found main content area.", contentArea);     
+
+        // Step 4: Find the specific containers by iterating through the DIRECT children of the Content Area.
+        for (const child of contentArea.children) {
+            // Check if this direct child contains a video.
+            if (child.querySelector('video')) {
+                videoContainerElement = child;
+                console.log("✅ Video container element captured.", videoContainerElement);
+            }
+            // Check if this direct child contains an image.
+            if (imageToUpload && child.querySelector('img')) {
+                imageContainerElement = child;
+                console.log("✅ Image container element captured.", imageContainerElement);
+            }
         }
 
         statusSpan.style.color = 'white'; // Reset color on success
