@@ -182,6 +182,15 @@ Object.assign(scheduleButton.style, {
 });
 secondLine.appendChild(scheduleButton);
 
+const scheduleDateInput = document.createElement('input');
+scheduleDateInput.type = 'date'; 
+scheduleDateInput.id = 'ch-schedule-date';
+Object.assign(scheduleDateInput.style, {
+    marginLeft: '10px', padding: '4px', border: '1px solid #555',
+    borderRadius: '5px', backgroundColor: '#34495e', color: 'white'
+});
+secondLine.insertBefore(scheduleDateInput, scheduleTimeInput);
+
 // The time input field for the schedule
 const scheduleTimeInput = document.createElement('input');
 scheduleTimeInput.type = 'time'; // Use the browser's native time picker
@@ -198,6 +207,7 @@ secondLine.appendChild(scheduleTimeInput);
 
 scheduleButton.addEventListener('click', () => {
     const timeValue = scheduleTimeInput.value;
+    const incrementMinutes = parseInt(document.getElementById('ch-increment-minutes').value, 10);
     if (!timeValue) {
         alert("Please select a time to schedule the post.");
         return;
@@ -207,10 +217,38 @@ scheduleButton.addEventListener('click', () => {
     runUploadOrchestrator();
 });
 
+// The "Increase by" number input field
+const incrementInput = document.createElement('input');
+incrementInput.type = 'number';
+incrementInput.id = 'ch-increment-minutes';
+incrementInput.min = '1';
+incrementInput.step = '1';
+incrementInput.value = '30'; // A sensible default
+Object.assign(incrementInput.style, {
+    marginLeft: '5px',
+    padding: '4px',
+    width: '60px', // Keep it small
+    border: '1px solid #555',
+    borderRadius: '5px',
+    backgroundColor: '#34495e',
+    color: 'white'
+});
+secondLine.appendChild(incrementInput);
+
+document.getElementById('ch-schedule-time').addEventListener('input', updateNextTimeDisplay);
+document.getElementById('ch-increment-minutes').addEventListener('input', updateNextTimeDisplay);
+
+// A label to show the calculated next post time
+const nextTimeLabel = document.createElement('span');
+nextTimeLabel.id = 'ch-next-time-label';
+nextTimeLabel.style.marginLeft = '10px';
+nextTimeLabel.style.fontWeight = 'bold';
+nextTimeLabel.style.color = '#1abc9c'; 
+secondLine.appendChild(nextTimeLabel);
 
 const openDetailsButton = document.createElement('button');
 openDetailsButton.textContent = 'Open Details';
-openDetailsButton.style.display = 'none'; // Hidden by default
+openDetailsButton.style.display = 'none'; 
 openDetailsButton.style.marginLeft = '15px';
 openDetailsButton.style.padding = '5px 10px';
 openDetailsButton.style.border = '1px solid #555';
@@ -220,6 +258,7 @@ openDetailsButton.style.color = 'white';
 openDetailsButton.style.cursor = 'pointer';
 openDetailsButton.addEventListener('click', showModal);
 rightSideControls.appendChild(openDetailsButton);
+
 
 const retryBannerButton = document.createElement('button');
 retryBannerButton.textContent = 'Retry Upload';
@@ -896,6 +935,74 @@ function createLoraRow(container, { filename, title = '', version = '' }) {
 
 // --- LOGIC ---
 
+// Load saved schedule settings on script start
+loadScheduleSettings();
+
+/**
+ * Calculates the next schedule time by adding increment minutes to a base time.
+ * @param {string} baseTime - Time in "HH:mm" format.
+ * @param {number} minutesToAdd - The number of minutes to add.
+ * @returns {string} The new time in "HH:mm" format.
+ */
+function calculateNextTime(baseTime, minutesToAdd) {
+    if (!baseTime) { // Handle case where no time is set yet
+        const now = new Date();
+        const hours = now.getHours().toString().padStart(2, '0');
+        const minutes = now.getMinutes().toString().padStart(2, '0');
+        baseTime = `${hours}:${minutes}`;
+    }
+
+    const [hours, minutes] = baseTime.split(':').map(Number);
+    const date = new Date();
+    date.setHours(hours, minutes, 0, 0); // Set time on today's date
+
+    date.setMinutes(date.getMinutes() + minutesToAdd);
+
+    const nextHours = date.getHours().toString().padStart(2, '0');
+    const nextMinutes = date.getMinutes().toString().padStart(2, '0');
+    
+    // We'll worry about the day change later, as you said.
+    return `${nextHours}:${nextMinutes}`;
+}
+
+/**
+ * Loads saved schedule settings from storage and updates the UI.
+ */
+async function loadScheduleSettings() {
+    const data = await chrome.storage.local.get(['lastScheduleTime', 'incrementMinutes']);
+    const scheduleTimeInput = document.getElementById('ch-schedule-time');
+    const incrementInput = document.getElementById('ch-increment-minutes');
+
+    if (scheduleTimeInput) {
+        scheduleTimeInput.value = data.lastScheduleTime || '16:00'; // Default to 16:00
+    }
+    if (incrementInput) {
+        incrementInput.value = data.incrementMinutes || '30'; // Default to 30 mins
+    }
+    updateNextTimeDisplay();
+}
+
+/**
+ * Reads the current UI values, calculates the next time, and updates the display label.
+ */
+function updateNextTimeDisplay() {
+    const scheduleTimeInput = document.getElementById('ch-schedule-time');
+    const incrementInput = document.getElementById('ch-increment-minutes');
+    const nextTimeLabel = document.getElementById('ch-next-time-label');
+
+    if (scheduleTimeInput && incrementInput && nextTimeLabel) {
+        const baseTime = scheduleTimeInput.value;
+        const minutesToAdd = parseInt(incrementInput.value, 10);
+        
+        if (baseTime && !isNaN(minutesToAdd)) {
+            const nextTime = calculateNextTime(baseTime, minutesToAdd);
+            nextTimeLabel.textContent = `-> Next post at: ${nextTime}`;
+        } else {
+            nextTimeLabel.textContent = '';
+        }
+    }
+}
+
 function showModal() {
     if (!metadataModal) createMetadataModal();
     metadataModal.style.display = 'flex';
@@ -1065,6 +1172,12 @@ async function handleStartButtonClick() {
  * @param {string} timeValue The time in "HH:mm" format.
  */
 async function schedulePost(timeValue) {
+    const baseTime = document.getElementById('ch-schedule-time').value;
+    const incrementMinutes = parseInt(document.getElementById('ch-increment-minutes').value, 10);
+    const timeToSchedule = calculateNextTime(baseTime, incrementMinutes);
+    console.log(`Scheduling post for calculated time: ${timeToSchedule}`);
+
+
     // 1. Find the clock icon button next to "Publish"
     const scheduleIconButton = document.querySelector('button[data-tour="post:publish"]').parentElement.querySelector('svg').parentElement.parentElement.parentElement;
     if (!scheduleIconButton) throw new Error("Could not find the schedule icon-button.");
@@ -1088,8 +1201,8 @@ async function schedulePost(timeValue) {
     // 5. Find the time input, set its value
     const timeInput = datePickerPopover.querySelector('input[type="time"]');
     if (!timeInput) throw new Error("Could not find the time input in the picker.");
-    console.log(`Setting time to: ${timeValue}`);
-    setInputValue(timeInput, timeValue);
+    console.log(`Setting time to: ${timeToSchedule}`);
+    setInputValue(timeInput, timeToSchedule);
     await new Promise(r => setTimeout(r, 100)); // Brief pause
 
     // 6. Find and click the checkmark submit button
@@ -1101,6 +1214,14 @@ async function schedulePost(timeValue) {
     await waitForElementToDisappear('div[data-dates-dropdown="true"]', 3000);
     console.log("✅ Date picker popover has closed.");
     
+    console.log("✅ Schedule modal has closed. Saving new time to storage...");
+    // Save the new base time and the increment for next time
+    await chrome.storage.local.set({ 
+        lastScheduleTime: timeToSchedule,
+        incrementMinutes: incrementMinutes
+    });   
+    console.log("✅ New schedule time saved.");     
+
     // 8. Find and click the main "Schedule" button in the modal
     const finalScheduleButton = Array.from(scheduleModal.querySelectorAll('button')).find(b => b.textContent === 'Schedule');
     if (!finalScheduleButton) throw new Error("Could not find the final 'Schedule' button.");
