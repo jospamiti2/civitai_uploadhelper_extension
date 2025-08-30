@@ -10,6 +10,7 @@ let metadataModal = null;
 let videoContainerElement = null;
 let imageContainerElement = null;
 let isAutoPostMode = false;
+let isSchedulePostMode = false;
 
 const SAMPLER_MAP = {
     // ComfyUI Name -> Civitai Name
@@ -91,39 +92,66 @@ banner.style.zIndex = '9999';
 banner.style.fontFamily = 'sans-serif';
 banner.style.fontSize = '16px';
 banner.style.boxShadow = '0 -2px 5px rgba(0,0,0,0.3)';
+banner.style.flexDirection = 'column';
+banner.style.alignItems = 'flex-start';
 document.body.append(banner);
 
 // --- Banner Content ---
+
+const firstLine = document.createElement('div');
+Object.assign(firstLine.style, {
+    display: 'flex',
+    alignItems: 'center',
+    marginBottom: '8px' 
+});
+banner.appendChild(firstLine);
+
+const secondLine = document.createElement('div');
+Object.assign(secondLine.style, {
+    display: 'flex',
+    alignItems: 'center'
+});
+banner.appendChild(secondLine);
+
 const titleSpan = document.createElement('span');
 titleSpan.style.fontWeight = 'bold';
 titleSpan.textContent = 'Civitai Helper:';
-banner.appendChild(titleSpan);
+firstLine.appendChild(titleSpan);
 
 const videoLabel = document.createElement('span');
 videoLabel.style.marginLeft = '15px';
 videoLabel.textContent = 'Video:';
-banner.appendChild(videoLabel);
+firstLine.appendChild(videoLabel);
 
 const videoInput = document.createElement('input');
 videoInput.type = 'file';
 videoInput.accept = "video/mp4,video/webm";
-banner.appendChild(videoInput);
+firstLine.appendChild(videoInput);
 
 const imageLabel = document.createElement('span');
 imageLabel.textContent = 'Image (Optional):';
 imageLabel.style.marginLeft = '15px';
-banner.appendChild(imageLabel);
+firstLine.appendChild(imageLabel);
 
 const imageInput = document.createElement('input');
 imageInput.type = 'file';
 imageInput.accept = "image/png,image/jpeg,image/webp";
-banner.appendChild(imageInput);
+firstLine.appendChild(imageInput);
+
+const rightSideControls = document.createElement('div');
+Object.assign(rightSideControls.style, {
+    marginLeft: 'auto', // Pushes this group to the right
+    display: 'flex',
+    alignItems: 'center'
+});
+secondLine.appendChild(rightSideControls);
+
 
 const uploadButton = document.createElement('button');
 uploadButton.textContent = 'Upload & Show Details';
 uploadButton.disabled = true;
 uploadButton.style.marginLeft = '15px'; uploadButton.style.padding = '5px 10px'; uploadButton.style.border = '1px solid #555'; uploadButton.style.borderRadius = '5px'; uploadButton.style.backgroundColor = '#3498db'; uploadButton.style.color = 'white'; uploadButton.style.cursor = 'pointer';
-banner.appendChild(uploadButton);
+secondLine.appendChild(uploadButton);
 
 const autoPostButton = document.createElement('button');
 autoPostButton.textContent = 'Auto Post';
@@ -137,7 +165,48 @@ Object.assign(autoPostButton.style, {
     cursor: 'pointer',
     fontWeight: 'bold'
 });
-uploadButton.after(autoPostButton);
+secondLine.append(autoPostButton);
+
+// --- "Auto Post Schedule" button
+const scheduleButton = document.createElement('button');
+scheduleButton.textContent = 'Auto Post Schedule';
+Object.assign(scheduleButton.style, {
+    marginLeft: '10px',
+    padding: '5px 10px',
+    border: '1px solid #16a085',
+    borderRadius: '5px',
+    backgroundColor: '#1abc9c',
+    color: 'white',
+    cursor: 'pointer',
+    fontWeight: 'bold'
+});
+secondLine.appendChild(scheduleButton);
+
+// The time input field for the schedule
+const scheduleTimeInput = document.createElement('input');
+scheduleTimeInput.type = 'time'; // Use the browser's native time picker
+scheduleTimeInput.id = 'ch-schedule-time';
+Object.assign(scheduleTimeInput.style, {
+    marginLeft: '5px',
+    padding: '4px',
+    border: '1px solid #555',
+    borderRadius: '5px',
+    backgroundColor: '#34495e',
+    color: 'white'
+});
+secondLine.appendChild(scheduleTimeInput);
+
+scheduleButton.addEventListener('click', () => {
+    const timeValue = scheduleTimeInput.value;
+    if (!timeValue) {
+        alert("Please select a time to schedule the post.");
+        return;
+    }
+    isAutoPostMode = true; 
+    isSchedulePostMode = true;
+    runUploadOrchestrator();
+});
+
 
 const openDetailsButton = document.createElement('button');
 openDetailsButton.textContent = 'Open Details';
@@ -150,7 +219,7 @@ openDetailsButton.style.backgroundColor = '#2980b9';
 openDetailsButton.style.color = 'white';
 openDetailsButton.style.cursor = 'pointer';
 openDetailsButton.addEventListener('click', showModal);
-banner.appendChild(openDetailsButton);
+rightSideControls.appendChild(openDetailsButton);
 
 const retryBannerButton = document.createElement('button');
 retryBannerButton.textContent = 'Retry Upload';
@@ -165,47 +234,41 @@ Object.assign(retryBannerButton.style, {
     cursor: 'pointer'
 });
 retryBannerButton.onclick = runUploadOrchestrator;
-banner.appendChild(retryBannerButton);
-
-// const testFillButton = document.createElement('button');
-// testFillButton.textContent = 'Test Prompt Fill';
-// testFillButton.style.display = 'none';
-// Object.assign(testFillButton.style, {
-//     marginLeft: '15px',
-//     padding: '5px 10px',
-//     border: '1px solid #555',
-//     borderRadius: '5px',
-//     backgroundColor: '#16a085',
-//     color: 'white',
-//     cursor: 'pointer'
-// });
-// testFillButton.onclick = initiateVideoMetadataFill;
-// banner.appendChild(testFillButton);
-
-// const testResourceButton = document.createElement('button');
-// testResourceButton.textContent = 'Test Resource Add';
-// testResourceButton.style.display = 'none'; // Show on upload success
-// Object.assign(testResourceButton.style, {
-//     marginLeft: '15px',
-//     padding: '5px 10px',
-//     border: '1px solid #555',
-//     borderRadius: '5px',
-//     backgroundColor: '#8e44ad', 
-//     color: 'white',
-//     cursor: 'pointer'
-// });
-// testResourceButton.onclick = testAddResources; 
-// banner.appendChild(testResourceButton);
+rightSideControls.appendChild(retryBannerButton);
 
 const statusSpan = document.createElement('span');
 statusSpan.style.marginLeft = '20px';
-banner.appendChild(statusSpan);
+rightSideControls.appendChild(statusSpan);
 
 const retryButton = document.createElement('button');
 retryButton.textContent = 'Delete Post & Reload';
 retryButton.style.marginLeft = '15px'; retryButton.style.padding = '5px 10px'; retryButton.style.border = '1px solid #555'; retryButton.style.borderRadius = '5px'; retryButton.style.backgroundColor = '#c0392b'; retryButton.style.color = 'white'; retryButton.style.cursor = 'pointer';
 retryButton.style.display = 'none';
-banner.appendChild(retryButton);
+rightSideControls.appendChild(retryButton);
+
+// --- The "Scooch Over" Link ---
+const scoochLink = document.createElement('a');
+scoochLink.textContent = 'scooch over, let me click something';
+scoochLink.href = '#';
+Object.assign(scoochLink.style, {
+    color: '#95a5a6',
+    textDecoration: 'underline',
+    fontSize: '12px',
+    cursor: 'pointer',
+    position: 'absolute', 
+    top: '-20px',         
+    right: '10px'
+});
+banner.appendChild(scoochLink);
+
+scoochLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    const originalDisplay = banner.style.display;
+    banner.style.display = 'none';
+    setTimeout(() => {
+        banner.style.display = originalDisplay;
+    }, 5000); 
+});
 
 
 async function populateModalWithData(data) {
@@ -807,6 +870,32 @@ function createLoraRow(container, { filename, title = '', version = '' }) {
 }
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// --- LOGIC ---
+
 function showModal() {
     if (!metadataModal) createMetadataModal();
     metadataModal.style.display = 'flex';
@@ -823,7 +912,6 @@ function hideModal() {
 }
 
 window.hideModal = hideModal;
-
 
 async function handleStartButtonClick() {
     const postButton = document.getElementById('ch-modal-post-btn');
@@ -939,17 +1027,30 @@ async function handleStartButtonClick() {
         await new Promise(r => setTimeout(r, 1000));
 
         // --- FINAL STEP: CLICK PUBLISH ---
+        if (isSchedulePostMode) {
+            updateStatus("⏳ Scheduling post...");
+            const timeValue = document.getElementById('ch-schedule-time').value;
+            await schedulePost(timeValue);
+            updateStatus("🎉 Post Scheduled! Angry CivitAI Upolaodhelper is victorious!");
+            return;
+        } 
+
+        if (isAutoPostMode) {
+            updateStatus("✅ All form filling complete. Publishing...");
+            const publishButton = document.querySelector('button[data-tour="post:publish"]');
+            if (!publishButton) throw new Error("Could not find the final 'Publish' button.");
+
+            console.log("😡 EAT THIS, PUBLISH BUTTON!");
+            publishButton.click();
+            updateStatus("🎉 Post published! Angry CivitAI Upolaodhelper is victorious!");
+            return;
+        }
+
+        await new Promise(r => setTimeout(r, 1000));
         const publishButton = document.querySelector('button[data-tour="post:publish"]');
         if (!publishButton) throw new Error("Could not find the final 'Publish' button.");
-
-        console.log("😡 EAT THIS, PUBLISH BUTTON!");
         publishButton.click();
-
-        updateStatus("✅ All tasks complete!");
-        // Final success state
-        updateStatus("🎉 Post Published! Angry Helper is victorious!");
-        // We can hide our own modal now, or leave it.
-        // hideModal();
+        updateStatus("🎉 Post Published! Angry CivitAI Upolaodhelper is victorious!");
 
     } catch (error) {
         updateStatus(`❌ Error: ${error.message}`, true);
@@ -959,32 +1060,58 @@ async function handleStartButtonClick() {
     }
 }
 
+/**
+ * Automates the entire post scheduling workflow.
+ * @param {string} timeValue The time in "HH:mm" format.
+ */
+async function schedulePost(timeValue) {
+    // 1. Find the clock icon button next to "Publish"
+    const scheduleIconButton = document.querySelector('button[data-tour="post:publish"]').parentElement.querySelector('svg').parentElement.parentElement.parentElement;
+    if (!scheduleIconButton) throw new Error("Could not find the schedule icon-button.");
+    
+    console.log("Clicking the schedule icon-button...");
+    scheduleIconButton.click();
 
+    // 2. Wait for the "Schedule your post" modal
+    const scheduleModal = await waitForModalWithText("Schedule your post", 5000);
+    console.log("✅ Schedule modal is open.");
 
+    // 3. Find and click the date/time button inside it to open the picker
+    const dateTimeButton = scheduleModal.querySelector('button[data-dates-input="true"]');
+    if (!dateTimeButton) throw new Error("Could not find the date/time button.");
+    dateTimeButton.click();
 
+    // 4. Wait for the date picker popover to appear
+    const datePickerPopover = await waitForInteractiveElement('div[data-dates-dropdown="true"]', 5000);
+    console.log("✅ Date picker popover is visible.");
 
+    // 5. Find the time input, set its value
+    const timeInput = datePickerPopover.querySelector('input[type="time"]');
+    if (!timeInput) throw new Error("Could not find the time input in the picker.");
+    console.log(`Setting time to: ${timeValue}`);
+    setInputValue(timeInput, timeValue);
+    await new Promise(r => setTimeout(r, 100)); // Brief pause
 
+    // 6. Find and click the checkmark submit button
+    const submitTimeButton = datePickerPopover.querySelector('button[class*="DateTimePicker-submitButton"]');
+    if (!submitTimeButton) throw new Error("Could not find the time submit button (checkmark).");
+    submitTimeButton.click();
+    
+    // 7. Wait for the popover to disappear
+    await waitForElementToDisappear('div[data-dates-dropdown="true"]', 3000);
+    console.log("✅ Date picker popover has closed.");
+    
+    // 8. Find and click the main "Schedule" button in the modal
+    const finalScheduleButton = Array.from(scheduleModal.querySelectorAll('button')).find(b => b.textContent === 'Schedule');
+    if (!finalScheduleButton) throw new Error("Could not find the final 'Schedule' button.");
+    
+    console.log("Clicking the final 'Schedule' button...");
+    finalScheduleButton.click();
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// --- LOGIC ---
+    // 9. Wait for the schedule modal to disappear
+    await waitForModalToDisappearByText("Schedule your post", 5000);
+    console.log("✅ Schedule modal has closed. Post is scheduled!");
+}
 
 /**
  * Reads the final list of selected image tools from the checkbox UI.
@@ -2613,11 +2740,13 @@ imageInput.addEventListener('change', async () => {
 
 uploadButton.addEventListener('click', () => {
     isAutoPostMode = false;
+    isSchedulePostMode = false;
     runUploadOrchestrator();
 });
 
 autoPostButton.addEventListener('click', () => {
     isAutoPostMode = true;
+    isSchedulePostMode = false;
     runUploadOrchestrator();
 });
 
