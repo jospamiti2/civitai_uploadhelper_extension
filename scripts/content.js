@@ -859,8 +859,8 @@ async function handleStartButtonClick() {
                     }
 
                     console.log(`Attempt ${attempt}/${MAX_ATTEMPTS} to add technique "${selectedTechnique}"`);
-                    await addTechnique(selectedTechnique);
-                    await waitForTechniqueAdded(selectedTechnique);
+                    await addTechnique(selectedTechnique, videoContainerElement);
+                    await waitForTechniqueAdded(selectedTechnique, videoContainerElement);
                     techniqueSuccess = true;
                     console.log("✅ Technique successfully added and verified.");
                     break;
@@ -888,6 +888,22 @@ async function handleStartButtonClick() {
                 await addResourcesFromList(imageLoras, imageContainerElement);
             }
         }
+
+        // Add Image Tools
+        const imageTools = getImageToolDataFromModal();
+        if (imageTools.length > 0) {
+            await addImageTools(imageTools); 
+            await Promise.all(imageTools.map(tool => waitForImageToolAdded(tool)));
+            console.log("✅ All image tools successfully added and verified.");
+        }  
+
+        // Add Image Technique
+        const selectedImageTechnique = document.querySelector('input[name="ch-image-technique"]:checked')?.value;
+        if (selectedImageTechnique) {
+            await addTechnique(selectedImageTechnique, imageContainerElement);
+            await waitForTechniqueAdded(selectedImageTechnique, imageContainerElement);
+        }        
+
 
 
         updateStatus("✅ All tasks complete!");
@@ -929,6 +945,112 @@ async function handleStartButtonClick() {
 
 
 // --- LOGIC ---
+
+/**
+ * Reads the final list of selected image tools from the checkbox UI.
+ * @returns {string[]} An array of selected tool names.
+ */
+function getImageToolDataFromModal() {
+    const tools = [];
+    // The master list of all checkboxes is the single source of truth.
+    const container = document.getElementById('ch-all-image-tools');
+    
+    if (container) {
+        // Find all checkboxes that are currently checked.
+        const checkedBoxes = container.querySelectorAll('input[type="checkbox"]:checked');
+        
+        // Extract the tool name from the 'data-tool-name' attribute of each checked box.
+        checkedBoxes.forEach(cb => {
+            tools.push(cb.dataset.toolName);
+        });
+    } else {
+        console.error("Could not find the image tools container ('ch-all-image-tools') to read data from.");
+    }
+    
+    console.log("Gathered selected image tools for processing:", tools);
+    return tools;
+}
+
+/**
+ * A dedicated function to add tools ONLY to the image section.
+ * @param {string[]} toolList A list of tool names.
+ */
+async function addImageTools(toolList) {
+    if (!imageContainerElement) throw new Error("Cannot add image tools: image container not found.");
+    if (toolList.length === 0) return;
+    
+    updateStatus(`⏳ Adding ${toolList.length} image tools...`);
+
+    // 1. Find and click the "TOOL" button in the IMAGE container.
+    const toolHeader = Array.from(imageContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Tools');
+    if (!toolHeader) throw new Error("Could not find 'Tools' heading in the image section.");
+
+    const addButtonContainer = toolHeader.parentElement.nextElementSibling;
+    const addToolButton = Array.from(addButtonContainer.querySelectorAll('button')).find(b => b.innerText.trim() === 'TOOL');
+    if (!addToolButton) throw new Error("Could not find 'TOOL' button for the image.");
+    
+    addToolButton.click();
+
+    // 2. Wait for the popover.
+    const popover = await waitForInteractiveElement('div[id^="headlessui-popover-panel-"]', 5000);
+    
+    // 3. Select all the tools.
+    let selectedCount = 0;
+    for (const toolName of toolList) {
+        let targetOption = Array.from(popover.querySelectorAll('div[role="option"]')).find(opt => opt.innerText.includes(toolName));
+        if (targetOption) {
+            const checkboxInput = targetOption.querySelector('input[type="checkbox"]');
+            simulateMouseClick(checkboxInput);
+            selectedCount++;
+            await new Promise(r => setTimeout(r, 200));
+        } else {
+            console.warn(`Could not find image tool "${toolName}". Skipping.`);
+        }
+    }
+    
+    if (selectedCount === 0) {
+        addToolButton.click(); // Close if nothing was selected
+        await waitForElementToDisappear('div[id^="headlessui-popover-panel-"]', 3000);
+        return;
+    }
+
+    // 4. Click "Add" N times.
+    const saveButton = Array.from(popover.querySelectorAll('button')).find(b => b.textContent.trim() === 'Add');
+    if (!saveButton) throw new Error("Could not find the 'Add' button for image tools.");
+
+    console.log(`😡 Found image tools 'Add' button. Clicking it ${selectedCount} times...`);
+    for (let i = 0; i < selectedCount; i++) {
+        saveButton.click();
+        await new Promise(r => setTimeout(r, 100));
+    }
+
+    await waitForElementToDisappear('div[id^="headlessui-popover-panel-"]', 3000);
+    console.log("✅ Image tools popover closed.");
+}
+
+
+function waitForImageToolAdded(toolName) {
+    return new Promise((resolve, reject) => {
+        const timeout = 5000;
+        const intervalId = setInterval(() => {
+            if (!imageContainerElement) return;
+            const toolHeader = Array.from(imageContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Tools');
+            if (!toolHeader) return;
+            // The structure for added tools is different, it's a UL
+            const container = toolHeader.parentElement.parentElement.parentElement;
+            const addedToolSpans = container.querySelectorAll('ul li span');
+            if (Array.from(addedToolSpans).some(span => span.textContent.trim() === toolName)) {
+                clearInterval(intervalId);
+                clearTimeout(timeoutId);
+                resolve(true);
+            }
+        }, 250);
+        const timeoutId = setTimeout(() => {
+            clearInterval(intervalId);
+            reject(new Error(`Verification Timeout: Image tool "${toolName}" did not appear.`));
+        }, timeout);
+    });
+}
 
 /**
  * Reads all LoRA data from the dedicated IMAGE resource section of the modal.
@@ -1282,12 +1404,12 @@ function readImageMetadata(file) {
  * Automates adding a single Technique to the post. This is a single-select action.
  * @param {string} techniqueName The name of the technique to select (e.g., "img2vid").
  */
-async function addTechnique(techniqueName) {
-    if (!videoContainerElement) throw new Error("Video container element not found.");
+async function addTechnique(techniqueName, containerElement) {
+    if (!containerElement) throw new Error("Video container element not found.");
 
     // 1. Find and click the "TECHNIQUE" button.
     console.log("Finding 'TECHNIQUE' button...");
-    const header = Array.from(videoContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Techniques');
+    const header = Array.from(containerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Techniques');
     if (!header) throw new Error("Could not find the 'Techniques' heading.");
 
     // The button is in a sibling div to the header's container.
@@ -1334,7 +1456,7 @@ async function addTechnique(techniqueName) {
  * @param {string} techniqueName The name of the technique to look for.
  * @returns {Promise<true>}
  */
-function waitForTechniqueAdded(techniqueName) {
+function waitForTechniqueAdded(techniqueName, containerElement) {
     return new Promise((resolve, reject) => {
         const timeout = 5000;
         const checkInterval = 250;
@@ -1344,8 +1466,8 @@ function waitForTechniqueAdded(techniqueName) {
         }, timeout);
 
         const intervalId = setInterval(() => {
-            if (!videoContainerElement) return;
-            const header = Array.from(videoContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Techniques');
+            if (!containerElement) return;
+            const header = Array.from(containerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Techniques');
             if (!header) return;
 
             const container = header.parentElement.parentElement.parentElement;
