@@ -9,6 +9,7 @@ let metadataModal = null;
 
 let videoContainerElement = null;
 let imageContainerElement = null;
+let isAutoPostMode = false;
 
 const SAMPLER_MAP = {
     // ComfyUI Name -> Civitai Name
@@ -119,10 +120,24 @@ imageInput.accept = "image/png,image/jpeg,image/webp";
 banner.appendChild(imageInput);
 
 const uploadButton = document.createElement('button');
-uploadButton.textContent = 'Upload';
+uploadButton.textContent = 'Upload & Show Details';
 uploadButton.disabled = true;
 uploadButton.style.marginLeft = '15px'; uploadButton.style.padding = '5px 10px'; uploadButton.style.border = '1px solid #555'; uploadButton.style.borderRadius = '5px'; uploadButton.style.backgroundColor = '#3498db'; uploadButton.style.color = 'white'; uploadButton.style.cursor = 'pointer';
 banner.appendChild(uploadButton);
+
+const autoPostButton = document.createElement('button');
+autoPostButton.textContent = 'Auto Post';
+Object.assign(autoPostButton.style, {
+    marginLeft: '10px',
+    padding: '5px 10px',
+    border: '1px solid #c0392b', 
+    borderRadius: '5px',
+    backgroundColor: '#e74c3c',
+    color: 'white',
+    cursor: 'pointer',
+    fontWeight: 'bold'
+});
+uploadButton.after(autoPostButton);
 
 const openDetailsButton = document.createElement('button');
 openDetailsButton.textContent = 'Open Details';
@@ -236,6 +251,22 @@ async function populateModalWithData(data) {
                 // It's unrecognized. Create a row in the other container.
                 createLoraRow(unrecognizedContainer, { filename: filename });
             }
+        }
+    }
+
+    if (isAutoPostMode && unrecognizedContainer.children.length > 0) {
+        console.warn("Unrecognized LoRAs found in Auto Post mode. Pausing for user input.");
+        
+        const userChoice = confirm("Angry CivitAi uploadhelper found unrecognized LoRAs!\n\nClick 'OK' to post anyway (they will not be linked).\nClick 'Cancel' to stop and add them manually.");
+
+        if (userChoice) {
+            console.log("User chose to continue. Resuming auto-post.");
+        } else {
+            console.log("User chose to stop. Aborting auto-post and showing details.");
+            isAutoPostMode = false; // Disable auto-post for this run
+            showModal(); // Show our UI so they can fix it
+            // Throw a specific, catchable error to gracefully stop the orchestrator
+            throw new Error("AUTO-POST_INTERRUPTED"); 
         }
     }
 
@@ -904,10 +935,19 @@ async function handleStartButtonClick() {
             await waitForTechniqueAdded(selectedImageTechnique, imageContainerElement);
         }        
 
+        updateStatus("✅ All form filling complete. Publishing...");
+        await new Promise(r => setTimeout(r, 1000));
 
+        // --- FINAL STEP: CLICK PUBLISH ---
+        const publishButton = document.querySelector('button[data-tour="post:publish"]');
+        if (!publishButton) throw new Error("Could not find the final 'Publish' button.");
+
+        console.log("😡 EAT THIS, PUBLISH BUTTON!");
+        publishButton.click();
 
         updateStatus("✅ All tasks complete!");
-        updateStatus("Angry Helper has finished all automated tasks!");
+        // Final success state
+        updateStatus("🎉 Post Published! Angry Helper is victorious!");
         // We can hide our own modal now, or leave it.
         // hideModal();
 
@@ -2571,7 +2611,15 @@ imageInput.addEventListener('change', async () => {
     }
 });
 
-uploadButton.addEventListener('click', runUploadOrchestrator);
+uploadButton.addEventListener('click', () => {
+    isAutoPostMode = false;
+    runUploadOrchestrator();
+});
+
+autoPostButton.addEventListener('click', () => {
+    isAutoPostMode = true;
+    runUploadOrchestrator();
+});
 
 
 // --- The Orchestrator ---
@@ -2640,13 +2688,25 @@ async function runUploadOrchestrator() {
             }
         }
 
-        statusSpan.style.color = 'white'; // Reset color on success
-        updateStatus('✅ All uploads complete! You can now fill out the form.');
-        document.getElementById('ch-modal-post-btn').disabled = false;
-        //testFillButton.style.display = 'inline-block';
-        //testResourceButton.style.display = 'inline-block';
+        if (isAutoPostMode) {
+            console.log("🤖 Auto Post mode enabled. Starting automation immediately.");
+            document.getElementById('ch-modal-post-btn').disabled = false;
+            hideModal();
+            setTimeout(handleStartButtonClick, 500);
+        } else {
+            // Manual mode: behave as before
+            document.getElementById('ch-modal-post-btn').disabled = false;
+            openDetailsButton.style.display = 'inline-block';
+            updateStatus('Uploads complete! You can now open details to fill the form.');
+        }
 
     } catch (error) {
+        // Gracefully handle our specific interruption error
+        if (error.message === "AUTO-POST_INTERRUPTED") {
+            updateStatus("🤖 Auto-post paused. Please add LoRA mappings.", false);
+            openDetailsButton.style.display = 'inline-block';
+            return; 
+        }        
         console.error('Orchestrator failed:', error);
         openDetailsButton.style.display = 'none';
         retryBannerButton.style.display = 'inline-block';
