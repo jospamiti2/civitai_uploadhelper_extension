@@ -189,7 +189,7 @@ Object.assign(scheduleDateInput.style, {
     marginLeft: '10px', padding: '4px', border: '1px solid #555',
     borderRadius: '5px', backgroundColor: '#34495e', color: 'white'
 });
-secondLine.insertBefore(scheduleDateInput, scheduleTimeInput);
+secondLine.appendChild(scheduleDateInput);
 
 // The time input field for the schedule
 const scheduleTimeInput = document.createElement('input');
@@ -237,6 +237,7 @@ secondLine.appendChild(incrementInput);
 
 document.getElementById('ch-schedule-time').addEventListener('input', updateNextTimeDisplay);
 document.getElementById('ch-increment-minutes').addEventListener('input', updateNextTimeDisplay);
+document.getElementById('ch-schedule-date').addEventListener('input', updateNextTimeDisplay);
 
 // A label to show the calculated next post time
 const nextTimeLabel = document.createElement('span');
@@ -939,64 +940,97 @@ function createLoraRow(container, { filename, title = '', version = '' }) {
 loadScheduleSettings();
 
 /**
- * Calculates the next schedule time by adding increment minutes to a base time.
+ * Calculates the next schedule date and time, handling day/month/year rollovers.
+ * @param {string} baseDate - Date in "YYYY-MM-DD" format.
  * @param {string} baseTime - Time in "HH:mm" format.
  * @param {number} minutesToAdd - The number of minutes to add.
- * @returns {string} The new time in "HH:mm" format.
+ * @returns {{date: string, time: string}} The new date and time.
  */
-function calculateNextTime(baseTime, minutesToAdd) {
-    if (!baseTime) { // Handle case where no time is set yet
-        const now = new Date();
-        const hours = now.getHours().toString().padStart(2, '0');
-        const minutes = now.getMinutes().toString().padStart(2, '0');
-        baseTime = `${hours}:${minutes}`;
-    }
-
+function calculateNextTime(baseDate, baseTime, minutesToAdd) {
+    const [year, month, day] = baseDate.split('-').map(Number);
     const [hours, minutes] = baseTime.split(':').map(Number);
-    const date = new Date();
-    date.setHours(hours, minutes, 0, 0); // Set time on today's date
-
+    
+    // Create a date object from the base date and time
+    const date = new Date(year, month - 1, day, hours, minutes);
+    
+    // Add the increment
     date.setMinutes(date.getMinutes() + minutesToAdd);
-
+    
+    // Format the new date and time parts
+    const nextYear = date.getFullYear();
+    const nextMonth = (date.getMonth() + 1).toString().padStart(2, '0');
+    const nextDay = date.getDate().toString().padStart(2, '0');
     const nextHours = date.getHours().toString().padStart(2, '0');
     const nextMinutes = date.getMinutes().toString().padStart(2, '0');
     
-    // We'll worry about the day change later, as you said.
-    return `${nextHours}:${nextMinutes}`;
+    return {
+        date: `${nextYear}-${nextMonth}-${nextDay}`,
+        time: `${nextHours}:${nextMinutes}`
+    };
 }
 
 /**
- * Loads saved schedule settings from storage and updates the UI.
+ * Loads saved schedule settings, checks if they are stale, and updates the UI.
  */
 async function loadScheduleSettings() {
-    const data = await chrome.storage.local.get(['lastScheduleTime', 'incrementMinutes']);
-    const scheduleTimeInput = document.getElementById('ch-schedule-time');
+    const data = await chrome.storage.local.get(['lastScheduleDate', 'lastScheduleTime', 'incrementMinutes']);
+    const dateInput = document.getElementById('ch-schedule-date');
+    const timeInput = document.getElementById('ch-schedule-time');
     const incrementInput = document.getElementById('ch-increment-minutes');
 
-    if (scheduleTimeInput) {
-        scheduleTimeInput.value = data.lastScheduleTime || '16:00'; // Default to 16:00
+    let scheduleDate = data.lastScheduleDate;
+    let scheduleTime = data.lastScheduleTime;
+    
+    const now = new Date();
+    
+    // --- The "Wake Up" Logic ---
+    if (scheduleDate && scheduleTime) {
+        const [year, month, day] = scheduleDate.split('-').map(Number);
+        const [hours, minutes] = scheduleTime.split(':').map(Number);
+        const lastScheduledDateTime = new Date(year, month - 1, day, hours, minutes);
+
+        // If the last scheduled time is in the past...
+        if (lastScheduledDateTime < now) {
+            console.log("Stale schedule found. Resetting to today.");
+            // Reset the date to today
+            const today = new Date();
+            scheduleDate = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}`;
+            // Reset the time to the next full hour
+            const nextHour = new Date();
+            nextHour.setHours(nextHour.getHours() + 1, 0, 0, 0);
+            scheduleTime = `${nextHour.getHours().toString().padStart(2, '0')}:00`;
+        }
+    } else {
+        // If there's no data at all, set to defaults (today, 16:00)
+        const today = new Date();
+        scheduleDate = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}`;
+        scheduleTime = '16:00';
     }
-    if (incrementInput) {
-        incrementInput.value = data.incrementMinutes || '30'; // Default to 30 mins
-    }
-    updateNextTimeDisplay();
+
+    if (dateInput) dateInput.value = scheduleDate;
+    if (timeInput) timeInput.value = scheduleTime;
+    if (incrementInput) incrementInput.value = data.incrementMinutes || '30';
+    
+    updateNextTimeDisplay(); 
 }
 
 /**
  * Reads the current UI values, calculates the next time, and updates the display label.
  */
 function updateNextTimeDisplay() {
-    const scheduleTimeInput = document.getElementById('ch-schedule-time');
+    const dateInput = document.getElementById('ch-schedule-date');
+    const timeInput = document.getElementById('ch-schedule-time');
     const incrementInput = document.getElementById('ch-increment-minutes');
     const nextTimeLabel = document.getElementById('ch-next-time-label');
 
-    if (scheduleTimeInput && incrementInput && nextTimeLabel) {
-        const baseTime = scheduleTimeInput.value;
+    if (dateInput && timeInput && incrementInput && nextTimeLabel) {
+        const baseDate = dateInput.value;
+        const baseTime = timeInput.value;
         const minutesToAdd = parseInt(incrementInput.value, 10);
         
-        if (baseTime && !isNaN(minutesToAdd)) {
-            const nextTime = calculateNextTime(baseTime, minutesToAdd);
-            nextTimeLabel.textContent = `-> Next post at: ${nextTime}`;
+        if (baseDate && baseTime && !isNaN(minutesToAdd)) {
+            const { date: nextDate, time: nextTime } = calculateNextTime(baseDate, baseTime, minutesToAdd);
+            nextTimeLabel.textContent = `-> Next post: ${nextDate} at ${nextTime}`;
         } else {
             nextTimeLabel.textContent = '';
         }
@@ -1137,7 +1171,7 @@ async function handleStartButtonClick() {
         if (isSchedulePostMode) {
             updateStatus("⏳ Scheduling post...");
             const timeValue = document.getElementById('ch-schedule-time').value;
-            await schedulePost(timeValue);
+            await schedulePost();
             updateStatus("🎉 Post Scheduled! Angry CivitAI Upolaodhelper is victorious!");
             return;
         } 
@@ -1171,12 +1205,18 @@ async function handleStartButtonClick() {
  * Automates the entire post scheduling workflow.
  * @param {string} timeValue The time in "HH:mm" format.
  */
-async function schedulePost(timeValue) {
+async function schedulePost() {
+    const baseDate = document.getElementById('ch-schedule-date').value;
     const baseTime = document.getElementById('ch-schedule-time').value;
     const incrementMinutes = parseInt(document.getElementById('ch-increment-minutes').value, 10);
-    const timeToSchedule = calculateNextTime(baseTime, incrementMinutes);
-    console.log(`Scheduling post for calculated time: ${timeToSchedule}`);
 
+    const { date: dateToSchedule, time: timeToSchedule } = calculateNextTime(baseDate, baseTime, incrementMinutes);
+    console.log(`🎯 TARGET: Schedule for ${dateToSchedule} at ${timeToSchedule}`);
+
+    // Parse the target date into components we can use
+    const [targetYear, targetMonth, targetDay] = dateToSchedule.split('-');
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const targetMonthName = monthNames[parseInt(targetMonth, 10) - 1];
 
     // 1. Find the clock icon button next to "Publish"
     const scheduleIconButton = document.querySelector('button[data-tour="post:publish"]').parentElement.querySelector('svg').parentElement.parentElement.parentElement;
@@ -1189,47 +1229,85 @@ async function schedulePost(timeValue) {
     const scheduleModal = await waitForModalWithText("Schedule your post", 5000);
     console.log("✅ Schedule modal is open.");
 
-    // 3. Find and click the date/time button inside it to open the picker
+    // 3. Open the date picker popover
     const dateTimeButton = scheduleModal.querySelector('button[data-dates-input="true"]');
-    if (!dateTimeButton) throw new Error("Could not find the date/time button.");
     dateTimeButton.click();
-
-    // 4. Wait for the date picker popover to appear
     const datePickerPopover = await waitForInteractiveElement('div[data-dates-dropdown="true"]', 5000);
     console.log("✅ Date picker popover is visible.");
 
-    // 5. Find the time input, set its value
+    // --- Deterministic Date Setting ---
+    // 4. Navigate to Year selection
+    let calendarHeaderLevel = datePickerPopover.querySelector('.mantine-DateTimePicker-calendarHeaderLevel');
+    if (!calendarHeaderLevel) throw new Error("Could not find calendar header.");
+    console.log(`Current view: ${calendarHeaderLevel.textContent}. Clicking to go to Year view.`);
+    calendarHeaderLevel.click();
+    await new Promise(r => setTimeout(r, 200)); // Wait for view to switch
+
+    calendarHeaderLevel = datePickerPopover.querySelector('.mantine-DateTimePicker-calendarHeaderLevel');
+    console.log(`Current view: ${calendarHeaderLevel.textContent}. Clicking to go to Decade view.`);
+    calendarHeaderLevel.click();
+    await new Promise(r => setTimeout(r, 200));
+
+    // 5. Select the Year
+    console.log(`Searching for year button: "${targetYear}"`);
+    const yearButtons = datePickerPopover.querySelectorAll('button');
+    const targetYearButton = Array.from(yearButtons).find(b => b.textContent === targetYear);
+    if (!targetYearButton) throw new Error(`Could not find year "${targetYear}"`);
+    console.log("✅ Found Year button. Clicking it.");
+    targetYearButton.click();
+    await new Promise(r => setTimeout(r, 200));
+
+    // 6. Select the Month
+    console.log(`Searching for month button: "${targetMonthName}"`);
+    const monthButtons = datePickerPopover.querySelectorAll('.mantine-DateTimePicker-monthsListControl');
+    const targetMonthButton = Array.from(monthButtons).find(b => b.textContent === targetMonthName);
+    if (!targetMonthButton) throw new Error(`Could not find month "${targetMonthName}"`);
+    console.log("✅ Found Month button. Clicking it.");
+    targetMonthButton.click();
+    await new Promise(r => setTimeout(r, 200));
+    
+    // 7. Select the Day
+    console.log(`Searching for day button: "${parseInt(targetDay, 10)}"`);
+    const dayButtons = datePickerPopover.querySelectorAll('.mantine-DateTimePicker-day');
+    const targetDayButton = Array.from(dayButtons).find(b => b.textContent === String(parseInt(targetDay, 10)) && !b.disabled);
+    if (!targetDayButton) throw new Error(`Could not find day "${targetDay}"`);
+    console.log("✅ Found Day button. Clicking it.");
+    targetDayButton.click();
+    await new Promise(r => setTimeout(r, 200));    
+
+    // --- Time Setting ---
+    // 8. Set the time value
     const timeInput = datePickerPopover.querySelector('input[type="time"]');
-    if (!timeInput) throw new Error("Could not find the time input in the picker.");
+    if (!timeInput) throw new Error("Could not find the time input.");
     console.log(`Setting time to: ${timeToSchedule}`);
     setInputValue(timeInput, timeToSchedule);
-    await new Promise(r => setTimeout(r, 100)); // Brief pause
+    await new Promise(r => setTimeout(r, 100));
 
-    // 6. Find and click the checkmark submit button
+    // 9. Click the time confirmation checkmark
     const submitTimeButton = datePickerPopover.querySelector('button[class*="DateTimePicker-submitButton"]');
     if (!submitTimeButton) throw new Error("Could not find the time submit button (checkmark).");
+    console.log("✅ Found time submit button. Clicking it.");
     submitTimeButton.click();
     
-    // 7. Wait for the popover to disappear
     await waitForElementToDisappear('div[data-dates-dropdown="true"]', 3000);
-    console.log("✅ Date picker popover has closed.");
-    
-    console.log("✅ Schedule modal has closed. Saving new time to storage...");
-    // Save the new base time and the increment for next time
-    await chrome.storage.local.set({ 
-        lastScheduleTime: timeToSchedule,
-        incrementMinutes: incrementMinutes
-    });   
-    console.log("✅ New schedule time saved.");     
+    console.log("✅ Date picker popover has closed.");    
 
-    // 8. Find and click the main "Schedule" button in the modal
+    // 10. Click the main "Schedule" button
     const finalScheduleButton = Array.from(scheduleModal.querySelectorAll('button')).find(b => b.textContent === 'Schedule');
     if (!finalScheduleButton) throw new Error("Could not find the final 'Schedule' button.");
     
-    console.log("Clicking the final 'Schedule' button...");
-    finalScheduleButton.click();
+    // 11. Save the new schedule back to storage for next time
+    console.log("✅ Schedule successful (SIMULATED). Saving new date and time to storage...");
+    await chrome.storage.local.set({ 
+        lastScheduleDate: dateToSchedule,
+        lastScheduleTime: timeToSchedule,
+        incrementMinutes: incrementMinutes
+    });
+    loadScheduleSettings();
 
-    // 9. Wait for the schedule modal to disappear
+    console.log("Clicking the final 'Schedule' button...");
+    finalScheduleButton.click(); // Commented out for safe testing
+    
     await waitForModalToDisappearByText("Schedule your post", 5000);
     console.log("✅ Schedule modal has closed. Post is scheduled!");
 }
