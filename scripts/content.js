@@ -102,7 +102,7 @@ const firstLine = document.createElement('div');
 Object.assign(firstLine.style, {
     display: 'flex',
     alignItems: 'center',
-    marginBottom: '8px' 
+    marginBottom: '8px'
 });
 banner.appendChild(firstLine);
 
@@ -158,7 +158,7 @@ autoPostButton.textContent = 'Auto Post';
 Object.assign(autoPostButton.style, {
     marginLeft: '10px',
     padding: '5px 10px',
-    border: '1px solid #c0392b', 
+    border: '1px solid #c0392b',
     borderRadius: '5px',
     backgroundColor: '#e74c3c',
     color: 'white',
@@ -183,7 +183,7 @@ Object.assign(scheduleButton.style, {
 secondLine.appendChild(scheduleButton);
 
 const scheduleDateInput = document.createElement('input');
-scheduleDateInput.type = 'date'; 
+scheduleDateInput.type = 'date';
 scheduleDateInput.id = 'ch-schedule-date';
 Object.assign(scheduleDateInput.style, {
     marginLeft: '10px', padding: '4px', border: '1px solid #555',
@@ -212,7 +212,7 @@ scheduleButton.addEventListener('click', () => {
         alert("Please select a time to schedule the post.");
         return;
     }
-    isAutoPostMode = true; 
+    isAutoPostMode = true;
     isSchedulePostMode = true;
     runUploadOrchestrator();
 });
@@ -244,12 +244,12 @@ const nextTimeLabel = document.createElement('span');
 nextTimeLabel.id = 'ch-next-time-label';
 nextTimeLabel.style.marginLeft = '10px';
 nextTimeLabel.style.fontWeight = 'bold';
-nextTimeLabel.style.color = '#1abc9c'; 
+nextTimeLabel.style.color = '#1abc9c';
 secondLine.appendChild(nextTimeLabel);
 
 const openDetailsButton = document.createElement('button');
 openDetailsButton.textContent = 'Open Details';
-openDetailsButton.style.display = 'none'; 
+openDetailsButton.style.display = 'none';
 openDetailsButton.style.marginLeft = '15px';
 openDetailsButton.style.padding = '5px 10px';
 openDetailsButton.style.border = '1px solid #555';
@@ -295,8 +295,8 @@ Object.assign(scoochLink.style, {
     textDecoration: 'underline',
     fontSize: '12px',
     cursor: 'pointer',
-    position: 'absolute', 
-    top: '-20px',         
+    position: 'absolute',
+    top: '-20px',
     right: '10px'
 });
 banner.appendChild(scoochLink);
@@ -307,7 +307,7 @@ scoochLink.addEventListener('click', (e) => {
     banner.style.display = 'none';
     setTimeout(() => {
         banner.style.display = originalDisplay;
-    }, 5000); 
+    }, 5000);
 });
 
 
@@ -321,8 +321,8 @@ async function populateModalWithData(data) {
     };
 
     // --- Populate standard video fields ---
-    setInputValue('ch-video-prompt', data.positive_prompt);
-    setInputValue('ch-video-neg-prompt', data.negative_prompt);
+    setInputValue('ch-video-prompt', sanitizePrompt(data.positive_prompt));
+    setInputValue('ch-video-neg-prompt', sanitizePrompt(data.negative_prompt));
     setInputValue('ch-video-guidance', data.cfg);
     setInputValue('ch-video-steps', data.steps);
     setInputValue('ch-video-sampler', data.sampler_name);
@@ -359,7 +359,7 @@ async function populateModalWithData(data) {
 
     if (isAutoPostMode && unrecognizedContainer.children.length > 0) {
         console.warn("Unrecognized LoRAs found in Auto Post mode. Pausing for user input.");
-        
+
         const userChoice = confirm("Angry CivitAi uploadhelper found unrecognized LoRAs!\n\nClick 'OK' to post anyway (they will not be linked).\nClick 'Cancel' to stop and add them manually.");
 
         if (userChoice) {
@@ -369,7 +369,7 @@ async function populateModalWithData(data) {
             isAutoPostMode = false; // Disable auto-post for this run
             showModal(); // Show our UI so they can fix it
             // Throw a specific, catchable error to gracefully stop the orchestrator
-            throw new Error("AUTO-POST_INTERRUPTED"); 
+            throw new Error("AUTO-POST_INTERRUPTED");
         }
     }
 
@@ -936,6 +936,479 @@ function createLoraRow(container, { filename, title = '', version = '' }) {
 
 // --- LOGIC ---
 
+
+
+
+// *****************************************************************************
+// MAIN ORCHESTRATOR FUNCTION
+// This is the main function that runs when the user clicks "Start Automation".
+// It tries to handle all steps automatically, with retries and error handling.
+// *****************************************************************************
+async function handleStartButtonClick() {
+    const postButton = document.getElementById('ch-modal-post-btn');
+    postButton.disabled = true;
+
+    try {
+        hideModal();
+        if (videoContainerElement) {
+            await fillVideoFields();
+        }
+
+        if (imageContainerElement) {
+            await fillImageFields();
+        }
+
+        updateStatus("✅ All form filling complete. Publishing...");
+        await new Promise(r => setTimeout(r, 1000));
+
+        // --- FINAL STEP: CLICK PUBLISH ---
+        if (isSchedulePostMode) {
+            updateStatus("⏳ Scheduling post...");
+            const timeValue = document.getElementById('ch-schedule-time').value;
+            await schedulePost();
+            updateStatus("🎉 Post Scheduled! Angry CivitAI Upolaodhelper is victorious!");
+            return;
+        }
+
+        if (isAutoPostMode) {
+            updateStatus("✅ All form filling complete. Publishing...");
+            const publishButton = document.querySelector('button[data-tour="post:publish"]');
+            if (!publishButton) throw new Error("Could not find the final 'Publish' button.");
+
+            console.log("😡 EAT THIS, PUBLISH BUTTON!");
+            publishButton.click();
+            updateStatus("🎉 Post published! Angry CivitAI Upolaodhelper is victorious!");
+            return;
+        }
+
+        await new Promise(r => setTimeout(r, 1000));
+        const publishButton = document.querySelector('button[data-tour="post:publish"]');
+        if (!publishButton) throw new Error("Could not find the final 'Publish' button.");
+        publishButton.click();
+        updateStatus("🎉 Post Published! Angry CivitAI Upolaodhelper is victorious!");
+
+    } catch (error) {
+        updateStatus(`❌ Error: ${error.message}`, true);
+        alert(`An error occurred: ${error.message}`);
+    } finally {
+        postButton.disabled = false;
+    }
+}
+
+// *****************************************************************************
+// VIDEO FORM FILLING FUNCTION
+// This function handles all the steps to fill in the video form fields,
+// including metadata, resources, tools, and technique.
+// It includes retries and error handling for robustness.
+// *****************************************************************************
+async function fillVideoFields() {
+    // Video tasks
+    // --- Part 1: Fill the metadata (prompts, sampler, etc.) ---
+    updateStatus("⏳ Filling metadata...");
+    await initiateVideoMetadataFill();
+    console.log("✅ Metadata filled.");
+
+    // --- Part 2: Get the LoRA list and add them ---
+    const loras = getLoraDataFromModal();
+    if (loras.length > 0) {
+        updateStatus(`Adding ${loras.length} resources...`);
+        await addResourcesFromList(loras, videoContainerElement);
+        updateStatus("✅ All resources added.");
+    } else {
+        console.log("No LoRAs to add.");
+    }
+
+    // --- Part 3: Add Tools ---
+    const videoTools = getVideoToolDataFromModal();
+    if (videoTools.length > 0) {
+        updateStatus(`⏳ Adding ${videoTools.length} video tools...`);
+        let toolsSuccess = false;
+        const MAX_TOOL_ATTEMPTS = 3;
+        for (let attempt = 1; attempt <= MAX_TOOL_ATTEMPTS; attempt++) {
+            try {
+                await addToolsFromList(videoTools); // Perform one full attempt
+                // Verify ALL tools were added
+                await Promise.all(videoTools.map(tool => waitForToolAdded(tool, 5000)));
+                toolsSuccess = true;
+                console.log("✅ All video tools successfully added and verified.");
+                break; // Success!
+            } catch (error) {
+                console.error(`❌ Attempt ${attempt} to add tools failed:`, error.message);
+                if (attempt < MAX_TOOL_ATTEMPTS) console.log("TRYING TOOLS AGAIN!");
+            }
+        }
+        if (!toolsSuccess) {
+            updateStatus(`❌ Failed to add all tools after ${MAX_TOOL_ATTEMPTS} attempts. Continuing.`, true);
+            await new Promise(r => setTimeout(r, 2000));
+        }
+    } else {
+        console.log("No video tools to add.");
+    }
+
+    // --- Part 4: Add Technique ---
+    const selectedTechnique = document.querySelector('input[name="ch-video-technique"]:checked')?.value;
+    if (selectedTechnique) {
+        updateStatus(`⏳ Adding technique: ${selectedTechnique}...`);
+        let techniqueSuccess = false;
+        const MAX_ATTEMPTS = 3;
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                // Check if it's already there first
+                const header = Array.from(videoContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Techniques');
+                if (header && header.parentElement.parentElement.innerText.includes(selectedTechnique)) {
+                    console.log(`Technique "${selectedTechnique}" is already present.`);
+                    techniqueSuccess = true;
+                    break;
+                }
+
+                console.log(`Attempt ${attempt}/${MAX_ATTEMPTS} to add technique "${selectedTechnique}"`);
+                await addTechnique(selectedTechnique, videoContainerElement);
+                await waitForTechniqueAdded(selectedTechnique, videoContainerElement);
+                techniqueSuccess = true;
+                console.log("✅ Technique successfully added and verified.");
+                break;
+            } catch (error) {
+                console.error(`Attempt ${attempt} to add technique failed: ${error.message}`);
+                if (attempt < MAX_ATTEMPTS) {
+                    console.log("😡 EAT THIS! AGAIN!");
+                }
+            }
+        }
+        if (!techniqueSuccess) {
+            updateStatus(`❌ Failed to add technique. CONTINUING.`, true);
+            await new Promise(r => setTimeout(r, 1500));
+        }
+    } else {
+        console.log("No technique selected to add.");
+    }
+
+}
+
+// *****************************************************************************
+// VIDEO METADATA FILLING FUNCTION
+// This function specifically handles filling in the video metadata fields
+// (prompt, negative prompt, sampler, steps, cfg, seed) in the modal.
+// It includes robust element selection, retries, and error handling.
+// *****************************************************************************
+async function initiateVideoMetadataFill() {
+    console.log("🚀 Starting prompt fill test...");
+
+    if (!videoContainerElement) {
+        statusSpan.textContent = "Error: Video container element not found. Please upload a video first.";
+        console.error("Video container element not found. Please upload a video first.");
+        return;
+    }
+
+    try {
+        // --- Step 1: Find the "Prompt" header element within our specific container ---
+        // This is robust because we are NOT searching the whole document.
+        const h3Elements = videoContainerElement.querySelectorAll('h3');
+        const promptHeader = Array.from(h3Elements).find(h => h.textContent.trim() === 'Prompt');
+
+        if (!promptHeader) {
+            statusSpan.textContent = "Error: 'Prompt' heading not found in video container.";
+            throw new Error("Could not find the 'Prompt' heading element inside the video container.");
+        }
+
+        // --- Step 2: Find the "EDIT" button, which is a sibling of the header ---
+        // We navigate to the header's parent, then find the button within that small scope.
+        const parentDiv = promptHeader.parentElement;
+        const editButton = parentDiv.querySelector('button');
+
+        if (!editButton || !editButton.textContent.includes('EDIT')) {
+            statusSpan.textContent = "Error: 'EDIT' button not found next to the prompt header.";
+            throw new Error("Could not find the 'EDIT' button next to the prompt header.");
+        }
+        console.log("✅ Found 'EDIT' button:", editButton);
+
+        // --- Step 3: Click the button and wait for the modal to appear ---
+        console.log("Clicking 'EDIT' button...");
+        editButton.click();
+
+        // The modal is a global element, so we can use a simpler selector here.
+        const modalContentSelector = 'section.mantine-Modal-content';
+        const modal = await waitForInteractiveElement(modalContentSelector, 5000);
+        console.log("✅ Successfully detected the prompt modal:", modal);
+
+        try {
+            // 1. Get the data from our extension's UI
+            const videoData = {
+                prompt: document.getElementById('ch-video-prompt').value,
+                negativePrompt: document.getElementById('ch-video-neg-prompt').value,
+                cfg: document.getElementById('ch-video-guidance').value,
+                steps: document.getElementById('ch-video-steps').value,
+                sampler: document.getElementById('ch-video-sampler').value,
+                seed: document.getElementById('ch-video-seed').value
+            };
+            console.log("📝 Data to fill:", videoData);
+
+            // 2. Fill the "simple" fields
+            setInputValue(modal.querySelector('#input_prompt'), sanitizePrompt(videoData.prompt));
+            setInputValue(modal.querySelector('#input_negativePrompt'), sanitizePrompt(videoData.negativePrompt));
+            setInputValue(modal.querySelector('#input_cfgScale'), videoData.cfg);
+            setInputValue(modal.querySelector('#input_steps'), videoData.steps);
+            setInputValue(modal.querySelector('#input_seed'), videoData.seed);
+            console.log("✅ Simple fields filled.");
+
+            // 3. Fill the "difficult" sampler field
+            const comfySampler = videoData.sampler.trim().toLowerCase();
+            const civitaiSampler = SAMPLER_MAP[comfySampler]; // Look it up in our dictionary
+
+            if (civitaiSampler) {
+                console.log(`✅ Sampler mapped: "${comfySampler}" -> "${civitaiSampler}"`);
+            } else {
+                console.warn(`Unmapped sampler: "${comfySampler}". Skipping sampler selection.`);
+            }
+
+            const MAX_SAMPLER_ATTEMPTS = 2; // We will try a maximum of two times.
+            let samplerSetCorrectly = false;
+
+            for (let i = 1; i <= MAX_SAMPLER_ATTEMPTS; i++) {
+                console.log(`Attempt ${i}/${MAX_SAMPLER_ATTEMPTS} to set sampler to "${civitaiSampler}"`);
+
+                // Perform one attempt to set the sampler.
+                await selectSampler(modal, civitaiSampler);
+
+                // Give the component a moment to update its value in the DOM after 'Enter'.
+                await new Promise(r => setTimeout(r, 200));
+
+                // VERIFY THE RESULT
+                const samplerInput = modal.querySelector('#input_sampler');
+                const currentValue = samplerInput ? samplerInput.value : '';
+                console.log(`Verification: Input value is now "${currentValue}"`);
+
+                if (currentValue === civitaiSampler) {
+                    samplerSetCorrectly = true;
+                    console.log("✅ Sampler set correctly.");
+                    break; // Success! Exit the loop.
+                } else {
+                    console.warn(`Sampler was not set correctly on attempt ${i}. Expected "${civitaiSampler}", got "${currentValue}".`);
+                    if (i < MAX_SAMPLER_ATTEMPTS) {
+                        console.log("Retrying...");
+                    }
+                }
+            }
+
+            if (!samplerSetCorrectly) {
+                console.error(`Failed to set sampler correctly after ${MAX_SAMPLER_ATTEMPTS} attempts. Continuing anyway.`);
+                // We don't throw an error, we just accept the failure and move on.
+            }
+
+            // 4. Handle the "onBlur" quirk and Save
+            const saveButton = Array.from(modal.querySelectorAll('button')).find(b => b.textContent === 'Save');
+            if (!saveButton) throw new Error("Could not find the 'Save' button in the modal.");
+
+            // Click the modal title to ensure the last input field loses focus (triggers onBlur)
+            const modalTitle = modal.querySelector('.mantine-Modal-title');
+            if (modalTitle) modalTitle.click();
+            await new Promise(r => setTimeout(r, 100)); // Short delay for safety
+
+            console.log("Clicking 'Save' button...");
+            saveButton.click();
+
+            // 5. Verify the modal closes
+            await waitForElementToDisappear(modalContentSelector, 5000);
+            console.log("🎉 Metadata modal filled and closed successfully!");
+            statusSpan.textContent = "Success! Video metadata has been filled.";
+
+        } catch (error) {
+            console.error("❌ Failed during metadata fill process:", error);
+            statusSpan.textContent = `Failed to fill metadata: ${error.message}`;
+            // Optionally, try to close the modal on failure
+            //const closeButton = modal.querySelector('button.mantine-Modal-close');
+            //if (closeButton) closeButton.click();
+        }
+
+
+    } catch (error) {
+        console.error("❌ Prompt fill test failed:", error);
+        statusSpan.textContent = `Prompt fill test failed: ${error.message}`;
+    }
+}
+
+// *****************************************************************************
+// IMAGE FORM FILLING FUNCTION
+// This function handles all the steps to fill in the image form fields,
+// including metadata, resources, tools, and technique.
+// It includes retries and error handling for robustness.
+// *****************************************************************************
+async function fillImageFields() {
+
+    updateStatus("⏳ Filling image metadata...");
+    await initiateImageMetadataFill();
+    console.log("✅ Image metadata filled.");
+
+    // Image tasks (if applicable)
+    if (imageToUpload && imageContainerElement) {
+        const imageLoras = getImageLoraDataFromModal();
+        if (imageLoras.length > 0) {
+            await addResourcesFromList(imageLoras, imageContainerElement);
+        }
+    }
+
+    // Add Image Tools
+    const imageTools = getImageToolDataFromModal();
+    if (imageTools.length > 0) {
+        await addImageTools(imageTools);
+        await Promise.all(imageTools.map(tool => waitForImageToolAdded(tool)));
+        console.log("✅ All image tools successfully added and verified.");
+    }
+
+    // Add Image Technique
+    const selectedImageTechnique = document.querySelector('input[name="ch-image-technique"]:checked')?.value;
+    if (selectedImageTechnique) {
+        await addTechnique(selectedImageTechnique, imageContainerElement);
+        await waitForTechniqueAdded(selectedImageTechnique, imageContainerElement);
+    }
+}
+
+// *****************************************************************************
+// IMAGE METADATA FILLING FUNCTION
+// This function specifically handles filling in the image metadata fields
+// (prompt, negative prompt, sampler, steps, cfg, seed) in the modal.
+// It includes a robust, angry retry loop to combat the site overwriting our values.
+// *****************************************************************************
+async function initiateImageMetadataFill() {
+    console.log("🚀 Starting ANGRY image metadata fill...");
+
+    if (!imageContainerElement) {
+        throw new Error("Cannot fill image metadata: The image container element was not found.");
+    }
+
+    const MAX_PROMPT_RETRIES = 5; // How many times we'll fight with the website
+    const RETRY_DELAY = 1000; // Wait 1 second between checks to let the site do its thing
+
+    // --- Step 1: Find the "EDIT" button, we'll need it multiple times ---
+    const h3Elements = imageContainerElement.querySelectorAll('h3');
+    const promptHeader = Array.from(h3Elements).find(h => h.textContent.trim() === 'Prompt');
+    if (!promptHeader) {
+        throw new Error("Could not find the 'Prompt' heading element inside the image container.");
+    }
+    const parentDiv = promptHeader.parentElement;
+    const editButton = parentDiv.querySelector('button');
+    if (!editButton || !editButton.textContent.includes('EDIT')) {
+        throw new Error("Could not find the 'EDIT' button next to the image prompt header.");
+    }
+    console.log("✅ Found image 'EDIT' button. Preparing for battle.");
+
+    // --- Step 2: Get target data and perform the INITIAL fill ---
+    const imageData = {
+        prompt: document.getElementById('ch-image-prompt').value,
+        negativePrompt: document.getElementById('ch-image-neg-prompt').value,
+        cfg: document.getElementById('ch-image-guidance').value,
+        steps: document.getElementById('ch-image-steps').value,
+        sampler: document.getElementById('ch-image-sampler').value,
+        seed: document.getElementById('ch-image-seed').value
+    };
+    const targetPrompt = sanitizePrompt(imageData.prompt);
+    const targetNegativePrompt = sanitizePrompt(imageData.negativePrompt);
+    const modalContentSelector = 'section.mantine-Modal-content';
+
+    console.log("Clicking 'EDIT' for the first attempt...");
+    editButton.click();
+    let modal = await waitForInteractiveElement(modalContentSelector, 5000);
+    console.log("📝 Performing initial data fill...");
+
+
+    // Now set the prompts and other fields
+    setInputValue(modal.querySelector('#input_prompt'), targetPrompt);
+    setInputValue(modal.querySelector('#input_negativePrompt'), targetNegativePrompt);
+    setInputValue(modal.querySelector('#input_cfgScale'), imageData.cfg);
+    setInputValue(modal.querySelector('#input_steps'), imageData.steps);
+    setInputValue(modal.querySelector('#input_seed'), imageData.seed);
+
+    await new Promise(r => setTimeout(r, 300));
+//    const comfySampler = imageData.sampler.trim().toLowerCase();
+//    const civitaiSampler = SAMPLER_MAP[comfySampler];
+//    if (civitaiSampler) {
+//        await selectSampler(modal, civitaiSampler);
+//    }
+//    await new Promise(r => setTimeout(r, 300));
+
+    const initialSaveButton = Array.from(modal.querySelectorAll('button')).find(b => b.textContent === 'Save');
+    if (!initialSaveButton) throw new Error("Could not find the 'Save' button in the image modal.");
+    initialSaveButton.click();
+    await waitForElementToDisappear(modalContentSelector, 5000);
+    console.log("✅ Initial fill complete. Now, we verify.");
+
+    // --- Step 3: The ANGRY Verification and Retry Loop ---
+    for (let attempt = 1; attempt <= MAX_PROMPT_RETRIES; attempt++) {
+        console.log(`🔎 Verifying prompt, attempt ${attempt}/${MAX_PROMPT_RETRIES}...`);
+        await new Promise(r => setTimeout(r, RETRY_DELAY)); // Wait for Civitai to potentially mess up
+
+        editButton.click();
+        const verificationModal = await waitForInteractiveElement(modalContentSelector, 5000);
+
+        const currentPrompt = verificationModal.querySelector('#input_prompt').value;
+
+        if (currentPrompt === targetPrompt) {
+            console.log("✅ VICTORY! The prompt has stuck. Closing verification modal.");
+            const closeButton = verificationModal.querySelector('button.mantine-Modal-close');
+            if (closeButton) closeButton.click();
+            await waitForElementToDisappear(modalContentSelector, 5000);
+            return; // Success! Exit the function.
+        }
+
+        // If we're here, the prompt did NOT stick.
+        console.warn(`😡 PROMPT MISMATCH! Site has overwritten the value. Expected: "${targetPrompt.substring(0, 50)}...", Got: "${currentPrompt.substring(0, 50)}...". REAPPLYING!`);
+        updateStatus(`😡 Prompt overwritten! Re-applying... (Attempt ${attempt})`);
+
+        // Re-apply ONLY the prompts
+        setInputValue(verificationModal.querySelector('#input_prompt'), targetPrompt);
+        setInputValue(verificationModal.querySelector('#input_negativePrompt'), targetNegativePrompt);
+
+        const retrySaveButton = Array.from(verificationModal.querySelectorAll('button')).find(b => b.textContent === 'Save');
+        if (!retrySaveButton) {
+             const closeButton = verificationModal.querySelector('button.mantine-Modal-close');
+             if (closeButton) closeButton.click();
+             throw new Error("Could not find 'Save' button during retry.");
+        }
+        
+        console.log("...saving correction...");
+        retrySaveButton.click();
+        await waitForElementToDisappear(modalContentSelector, 5000);
+    }
+
+    // If the loop finishes without returning, it means we failed.
+    throw new Error(`DEFEAT: Failed to set the image prompt correctly after ${MAX_PROMPT_RETRIES} attempts. Civitai won this round.`);
+}
+
+
+
+/**
+ * Removes forbidden words from a prompt string
+ * @param {string} prompt The original prompt string.
+ * @returns {string} The sanitized prompt string.
+ */
+function sanitizePrompt(prompt) {
+    if (!prompt) {
+        return '';
+    }
+
+    console.log("Sanitizing prompt:", prompt);
+
+    const forbiddenWords = ['teenage', 'teen'];
+    let sanitizedPrompt = prompt;
+
+    forbiddenWords.forEach(wordToReplace => {
+        let result = '';
+        let lastIndex = 0;
+        const lowerCasePrompt = sanitizedPrompt.toLowerCase();
+        const lowerCaseWord = wordToReplace.toLowerCase();
+        let currentIndex = lowerCasePrompt.indexOf(lowerCaseWord);
+
+        while (currentIndex !== -1) {
+            result += sanitizedPrompt.substring(lastIndex, currentIndex);
+            lastIndex = currentIndex + wordToReplace.length;
+            currentIndex = lowerCasePrompt.indexOf(lowerCaseWord, lastIndex);
+        }
+        result += sanitizedPrompt.substring(lastIndex);
+        sanitizedPrompt = result;
+    });
+
+    return sanitizedPrompt;
+}
+
 // Load saved schedule settings on script start
 loadScheduleSettings();
 
@@ -949,20 +1422,20 @@ loadScheduleSettings();
 function calculateNextTime(baseDate, baseTime, minutesToAdd) {
     const [year, month, day] = baseDate.split('-').map(Number);
     const [hours, minutes] = baseTime.split(':').map(Number);
-    
+
     // Create a date object from the base date and time
     const date = new Date(year, month - 1, day, hours, minutes);
-    
+
     // Add the increment
     date.setMinutes(date.getMinutes() + minutesToAdd);
-    
+
     // Format the new date and time parts
     const nextYear = date.getFullYear();
     const nextMonth = (date.getMonth() + 1).toString().padStart(2, '0');
     const nextDay = date.getDate().toString().padStart(2, '0');
     const nextHours = date.getHours().toString().padStart(2, '0');
     const nextMinutes = date.getMinutes().toString().padStart(2, '0');
-    
+
     return {
         date: `${nextYear}-${nextMonth}-${nextDay}`,
         time: `${nextHours}:${nextMinutes}`
@@ -980,9 +1453,9 @@ async function loadScheduleSettings() {
 
     let scheduleDate = data.lastScheduleDate;
     let scheduleTime = data.lastScheduleTime;
-    
+
     const now = new Date();
-    
+
     // --- The "Wake Up" Logic ---
     if (scheduleDate && scheduleTime) {
         const [year, month, day] = scheduleDate.split('-').map(Number);
@@ -1010,8 +1483,8 @@ async function loadScheduleSettings() {
     if (dateInput) dateInput.value = scheduleDate;
     if (timeInput) timeInput.value = scheduleTime;
     if (incrementInput) incrementInput.value = data.incrementMinutes || '30';
-    
-    updateNextTimeDisplay(); 
+
+    updateNextTimeDisplay();
 }
 
 /**
@@ -1027,7 +1500,7 @@ function updateNextTimeDisplay() {
         const baseDate = dateInput.value;
         const baseTime = timeInput.value;
         const minutesToAdd = parseInt(incrementInput.value, 10);
-        
+
         if (baseDate && baseTime && !isNaN(minutesToAdd)) {
             const { date: nextDate, time: nextTime } = calculateNextTime(baseDate, baseTime, minutesToAdd);
             nextTimeLabel.textContent = `-> Next post: ${nextDate} at ${nextTime}`;
@@ -1040,10 +1513,10 @@ function updateNextTimeDisplay() {
 function showModal() {
     if (!metadataModal) createMetadataModal();
     metadataModal.style.display = 'flex';
-    //const imageSection = document.getElementById('ch-image-section');
-    //if (imageSection) {
-    //    imageSection.style.display = imageToUpload ? 'block' : 'none';
-    //}
+    const imageSection = document.getElementById('ch-image-section');
+    if (imageSection) {
+        imageSection.style.display = imageToUpload ? 'block' : 'none';
+    }
 }
 
 window.showModal = showModal;
@@ -1054,152 +1527,7 @@ function hideModal() {
 
 window.hideModal = hideModal;
 
-async function handleStartButtonClick() {
-    const postButton = document.getElementById('ch-modal-post-btn');
-    postButton.disabled = true;
 
-    try {
-        hideModal();
-        // Video tasks
-        // --- Part 1: Fill the metadata (prompts, sampler, etc.) ---
-        updateStatus("⏳ Filling metadata...");
-        await initiateVideoMetadataFill();
-        console.log("✅ Metadata filled.");
-
-        // --- Part 2: Get the LoRA list and add them ---
-        const loras = getLoraDataFromModal();
-        if (loras.length > 0) {
-            updateStatus(`Adding ${loras.length} resources...`);
-            await addResourcesFromList(loras, videoContainerElement);
-            updateStatus("✅ All resources added.");
-        } else {
-            console.log("No LoRAs to add.");
-        }
-
-        // --- Part 3: Add Tools ---
-        const videoTools = getVideoToolDataFromModal();
-        if (videoTools.length > 0) {
-            updateStatus(`⏳ Adding ${videoTools.length} video tools...`);
-            let toolsSuccess = false;
-            const MAX_TOOL_ATTEMPTS = 3;
-            for (let attempt = 1; attempt <= MAX_TOOL_ATTEMPTS; attempt++) {
-                try {
-                    await addToolsFromList(videoTools); // Perform one full attempt
-                    // Verify ALL tools were added
-                    await Promise.all(videoTools.map(tool => waitForToolAdded(tool, 5000)));
-                    toolsSuccess = true;
-                    console.log("✅ All video tools successfully added and verified.");
-                    break; // Success!
-                } catch (error) {
-                    console.error(`❌ Attempt ${attempt} to add tools failed:`, error.message);
-                    if (attempt < MAX_TOOL_ATTEMPTS) console.log("TRYING TOOLS AGAIN!");
-                }
-            }
-            if (!toolsSuccess) {
-                updateStatus(`❌ Failed to add all tools after ${MAX_TOOL_ATTEMPTS} attempts. Continuing.`, true);
-                await new Promise(r => setTimeout(r, 2000));
-            }
-        } else {
-            console.log("No video tools to add.");
-        }
-
-        const selectedTechnique = document.querySelector('input[name="ch-video-technique"]:checked')?.value;
-        if (selectedTechnique) {
-            updateStatus(`⏳ Adding technique: ${selectedTechnique}...`);
-            let techniqueSuccess = false;
-            const MAX_ATTEMPTS = 3;
-            for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-                try {
-                    // Check if it's already there first
-                    const header = Array.from(videoContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Techniques');
-                    if (header && header.parentElement.parentElement.innerText.includes(selectedTechnique)) {
-                        console.log(`Technique "${selectedTechnique}" is already present.`);
-                        techniqueSuccess = true;
-                        break;
-                    }
-
-                    console.log(`Attempt ${attempt}/${MAX_ATTEMPTS} to add technique "${selectedTechnique}"`);
-                    await addTechnique(selectedTechnique, videoContainerElement);
-                    await waitForTechniqueAdded(selectedTechnique, videoContainerElement);
-                    techniqueSuccess = true;
-                    console.log("✅ Technique successfully added and verified.");
-                    break;
-                } catch (error) {
-                    console.error(`Attempt ${attempt} to add technique failed: ${error.message}`);
-                    if (attempt < MAX_ATTEMPTS) {
-                        console.log("😡 EAT THIS! AGAIN!");
-                    }
-                }
-            }
-            if (!techniqueSuccess) {
-                updateStatus(`❌ Failed to add technique. CONTINUING.`, true);
-                await new Promise(r => setTimeout(r, 1500));
-            }
-        } else {
-            console.log("No technique selected to add.");
-        }
-
-
-
-        // Image tasks (if applicable)
-        if (imageToUpload && imageContainerElement) {
-            const imageLoras = getImageLoraDataFromModal(); 
-            if (imageLoras.length > 0) {
-                await addResourcesFromList(imageLoras, imageContainerElement);
-            }
-        }
-
-        // Add Image Tools
-        const imageTools = getImageToolDataFromModal();
-        if (imageTools.length > 0) {
-            await addImageTools(imageTools); 
-            await Promise.all(imageTools.map(tool => waitForImageToolAdded(tool)));
-            console.log("✅ All image tools successfully added and verified.");
-        }  
-
-        // Add Image Technique
-        const selectedImageTechnique = document.querySelector('input[name="ch-image-technique"]:checked')?.value;
-        if (selectedImageTechnique) {
-            await addTechnique(selectedImageTechnique, imageContainerElement);
-            await waitForTechniqueAdded(selectedImageTechnique, imageContainerElement);
-        }        
-
-        updateStatus("✅ All form filling complete. Publishing...");
-        await new Promise(r => setTimeout(r, 1000));
-
-        // --- FINAL STEP: CLICK PUBLISH ---
-        if (isSchedulePostMode) {
-            updateStatus("⏳ Scheduling post...");
-            const timeValue = document.getElementById('ch-schedule-time').value;
-            await schedulePost();
-            updateStatus("🎉 Post Scheduled! Angry CivitAI Upolaodhelper is victorious!");
-            return;
-        } 
-
-        if (isAutoPostMode) {
-            updateStatus("✅ All form filling complete. Publishing...");
-            const publishButton = document.querySelector('button[data-tour="post:publish"]');
-            if (!publishButton) throw new Error("Could not find the final 'Publish' button.");
-
-            console.log("😡 EAT THIS, PUBLISH BUTTON!");
-            publishButton.click();
-            updateStatus("🎉 Post published! Angry CivitAI Upolaodhelper is victorious!");
-            return;
-        }
-
-        await new Promise(r => setTimeout(r, 1000));
-        const publishButton = document.querySelector('button[data-tour="post:publish"]');
-        if (!publishButton) throw new Error("Could not find the final 'Publish' button.");
-        publishButton.click();
-        updateStatus("🎉 Post Published! Angry CivitAI Upolaodhelper is victorious!");
-
-    } catch (error) {
-        updateStatus(`❌ Error: ${error.message}`, true);
-        alert(`An error occurred: ${error.message}`);
-    } finally {
-        postButton.disabled = false;
-    }
-}
 
 /**
  * Automates the entire post scheduling workflow.
@@ -1221,7 +1549,7 @@ async function schedulePost() {
     // 1. Find the clock icon button next to "Publish"
     const scheduleIconButton = document.querySelector('button[data-tour="post:publish"]').parentElement.querySelector('svg').parentElement.parentElement.parentElement;
     if (!scheduleIconButton) throw new Error("Could not find the schedule icon-button.");
-    
+
     console.log("Clicking the schedule icon-button...");
     scheduleIconButton.click();
 
@@ -1265,7 +1593,7 @@ async function schedulePost() {
     console.log("✅ Found Month button. Clicking it.");
     targetMonthButton.click();
     await new Promise(r => setTimeout(r, 200));
-    
+
     // 7. Select the Day
     console.log(`Searching for day button: "${parseInt(targetDay, 10)}"`);
     const dayButtons = datePickerPopover.querySelectorAll('.mantine-DateTimePicker-day');
@@ -1273,7 +1601,7 @@ async function schedulePost() {
     if (!targetDayButton) throw new Error(`Could not find day "${targetDay}"`);
     console.log("✅ Found Day button. Clicking it.");
     targetDayButton.click();
-    await new Promise(r => setTimeout(r, 200));    
+    await new Promise(r => setTimeout(r, 200));
 
     // --- Time Setting ---
     // 8. Set the time value
@@ -1288,17 +1616,17 @@ async function schedulePost() {
     if (!submitTimeButton) throw new Error("Could not find the time submit button (checkmark).");
     console.log("✅ Found time submit button. Clicking it.");
     submitTimeButton.click();
-    
+
     await waitForElementToDisappear('div[data-dates-dropdown="true"]', 3000);
-    console.log("✅ Date picker popover has closed.");    
+    console.log("✅ Date picker popover has closed.");
 
     // 10. Click the main "Schedule" button
     const finalScheduleButton = Array.from(scheduleModal.querySelectorAll('button')).find(b => b.textContent === 'Schedule');
     if (!finalScheduleButton) throw new Error("Could not find the final 'Schedule' button.");
-    
+
     // 11. Save the new schedule back to storage for next time
     console.log("✅ Schedule successful (SIMULATED). Saving new date and time to storage...");
-    await chrome.storage.local.set({ 
+    await chrome.storage.local.set({
         lastScheduleDate: dateToSchedule,
         lastScheduleTime: timeToSchedule,
         incrementMinutes: incrementMinutes
@@ -1307,7 +1635,7 @@ async function schedulePost() {
 
     console.log("Clicking the final 'Schedule' button...");
     finalScheduleButton.click(); // Commented out for safe testing
-    
+
     await waitForModalToDisappearByText("Schedule your post", 5000);
     console.log("✅ Schedule modal has closed. Post is scheduled!");
 }
@@ -1320,11 +1648,11 @@ function getImageToolDataFromModal() {
     const tools = [];
     // The master list of all checkboxes is the single source of truth.
     const container = document.getElementById('ch-all-image-tools');
-    
+
     if (container) {
         // Find all checkboxes that are currently checked.
         const checkedBoxes = container.querySelectorAll('input[type="checkbox"]:checked');
-        
+
         // Extract the tool name from the 'data-tool-name' attribute of each checked box.
         checkedBoxes.forEach(cb => {
             tools.push(cb.dataset.toolName);
@@ -1332,7 +1660,7 @@ function getImageToolDataFromModal() {
     } else {
         console.error("Could not find the image tools container ('ch-all-image-tools') to read data from.");
     }
-    
+
     console.log("Gathered selected image tools for processing:", tools);
     return tools;
 }
@@ -1344,7 +1672,7 @@ function getImageToolDataFromModal() {
 async function addImageTools(toolList) {
     if (!imageContainerElement) throw new Error("Cannot add image tools: image container not found.");
     if (toolList.length === 0) return;
-    
+
     updateStatus(`⏳ Adding ${toolList.length} image tools...`);
 
     // 1. Find and click the "TOOL" button in the IMAGE container.
@@ -1354,12 +1682,12 @@ async function addImageTools(toolList) {
     const addButtonContainer = toolHeader.parentElement.nextElementSibling;
     const addToolButton = Array.from(addButtonContainer.querySelectorAll('button')).find(b => b.innerText.trim() === 'TOOL');
     if (!addToolButton) throw new Error("Could not find 'TOOL' button for the image.");
-    
+
     addToolButton.click();
 
     // 2. Wait for the popover.
     const popover = await waitForInteractiveElement('div[id^="headlessui-popover-panel-"]', 5000);
-    
+
     // 3. Select all the tools.
     let selectedCount = 0;
     for (const toolName of toolList) {
@@ -1373,7 +1701,7 @@ async function addImageTools(toolList) {
             console.warn(`Could not find image tool "${toolName}". Skipping.`);
         }
     }
-    
+
     if (selectedCount === 0) {
         addToolButton.click(); // Close if nothing was selected
         await waitForElementToDisappear('div[id^="headlessui-popover-panel-"]', 3000);
@@ -1426,11 +1754,11 @@ function getImageLoraDataFromModal() {
     const loras = [];
     // These are the correct IDs for the UI we built for the image section
     const rows = document.querySelectorAll('#ch-image-recognized-loras .lora-item, #ch-image-unrecognized-loras .lora-item');
-    
+
     rows.forEach(row => {
         const titleInput = row.querySelector('.title');
         const versionInput = row.querySelector('.version');
-        
+
         if (titleInput && versionInput && titleInput.value.trim() !== '') {
             loras.push({
                 title: titleInput.value.trim(),
@@ -1523,14 +1851,14 @@ async function populateImageModalData(data) {
     const selectedContainer = document.getElementById('ch-selected-image-tools');
     const allContainer = document.getElementById('ch-all-image-tools');
     if (!selectedContainer || !allContainer) return;
-    
+
     selectedContainer.innerHTML = '';
     const preselected = new Set(["ComfyUI"]);
 
     allContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => {
         cb.checked = preselected.has(cb.dataset.toolName);
     });
-    
+
     const updateImageSummary = () => {
         selectedContainer.innerHTML = '';
         const checkedInMainList = allContainer.querySelectorAll('input:checked');
@@ -1547,7 +1875,7 @@ async function populateImageModalData(data) {
     };
 
     allContainer.addEventListener('change', updateImageSummary);
-    updateImageSummary();    
+    updateImageSummary();
 
     // Make sure the section is visible
     const imageSection = document.getElementById('ch-image-section');
@@ -1679,14 +2007,14 @@ function readImageMetadata(file) {
                     if (parentOfVaeDecideInputImageNode && parentOfVaeDecideInputImageNode.class_type == 'VAEDecode') {
                         if (parentOfVaeDecideInputImageNode.inputs && parentOfVaeDecideInputImageNode.inputs.samples) {
                             if (parentOfVaeDecideInputImageNode.inputs.samples.length > 0) {
-                                if ( workflow[parentOfVaeDecideInputImageNode.inputs.samples[0]].class_type === 'KSampler') {
+                                if (workflow[parentOfVaeDecideInputImageNode.inputs.samples[0]].class_type === 'KSampler') {
                                     console.log("Found KSampler node via VAEDecode image input:", parentOfVaeDecideInputImageNode.inputs.samples[0]);
                                     ksamplerNodeId = parentOfVaeDecideInputImageNode.inputs.samples[0];
                                 }
                             }
                         }
                     } else {
-                        console.log("Could not trace back to a VAEDecode node.");  
+                        console.log("Could not trace back to a VAEDecode node.");
                         resolve(null);
                         return;
                     }
@@ -1694,7 +2022,7 @@ function readImageMetadata(file) {
                     ksamplerNodeId = workflow[vaeDecodeNodeId].inputs.samples[0];
                     console.log("Found KSampler node:", ksamplerNodeId);
                 }
-                if (!ksamplerNodeId == null) {  
+                if (!ksamplerNodeId == null) {
                     console.log("KSampler node ID is null.");
                     resolve(null);
                     return;
@@ -1702,7 +2030,7 @@ function readImageMetadata(file) {
                 const ksamplerNode = workflow[ksamplerNodeId];
                 console.log("KSampler node details:", ksamplerNode);
 
-                if (ksamplerNode.class_type !== 'KSampler') {
+                if (ksamplerNode.class_type !== 'KSampler' && ksamplerNode.class_type !== "SamplerCustomAdvanced") {
                     console.log("Could not trace back to a KSampler node.");
                     resolve(null);
                     return;
@@ -1710,14 +2038,18 @@ function readImageMetadata(file) {
 
                 const ksamplerInputs = ksamplerNode.inputs;
 
+
                 console.log("KSampler inputs:", ksamplerInputs);
                 const posPromptNodeKey = ksamplerInputs.positive[0];
                 console.log("Positive prompt node key:", posPromptNodeKey);
                 const negPromptNodeKey = ksamplerInputs.negative[0];
                 console.log("Negative prompt node key:", negPromptNodeKey);
-                const positive_prompt = workflow[posPromptNodeKey]?.inputs.text || '';
+
+                const original_positive_prompt = workflow[posPromptNodeKey]?.inputs.text || '';
+                const original_negative_prompt = workflow[negPromptNodeKey]?.inputs.text || '';
+                const positive_prompt = sanitizePrompt(original_positive_prompt);
+                const negative_prompt = sanitizePrompt(original_negative_prompt);
                 console.log("Extracted positive prompt:", positive_prompt);
-                const negative_prompt = workflow[negPromptNodeKey]?.inputs.text || '';
                 console.log("Extracted negative prompt:", negative_prompt);
 
                 // Trace back to find the base model
@@ -2371,9 +2703,9 @@ async function addSingleResource(resourceName, resourceVersion, containerElement
                     closestDropdown = dropdown;
                 }
             }
-            
+
             if (!closestDropdown) throw new Error("Could not determine the closest dropdown to the version input.");
-            
+
             const versionDropdown = closestDropdown;
             console.log("✅ Found the correct version dropdown by proximity.");
 
@@ -2383,7 +2715,7 @@ async function addSingleResource(resourceName, resourceVersion, containerElement
             let attempts = 20; // Try for 2 seconds
             while (attempts > 0) {
                 const allVersionOptions = versionDropdown.querySelectorAll('div[data-combobox-option]');
-                
+
                 // Find the option where the direct child SPAN's text matches exactly.
                 targetVersionOption = Array.from(allVersionOptions).find(opt => {
                     const span = opt.querySelector('span');
@@ -2392,7 +2724,7 @@ async function addSingleResource(resourceName, resourceVersion, containerElement
 
                 if (targetVersionOption) {
                     console.log(`✅ Found version option "${resourceVersion}" in dropdown.`);
-                    break; 
+                    break;
                 }
                 await new Promise(r => setTimeout(r, 100));
                 attempts--;
@@ -2504,32 +2836,53 @@ async function selectSampler(modal, samplerName) {
     // STEP 1: Click to open and focus.
     console.log("Clicking sampler input to open the dropdown...");
     samplerInput.click();
-
+    await new Promise(r => setTimeout(r, 300));
     // STEP 2: Wait for the dropdown to be ready.
     const dropdownSelector = 'div[aria-labelledby="input_sampler-label"]';
     await waitForInteractiveElement(dropdownSelector, 5000);
     console.log("✅ Sampler dropdown is interactive.");
+    await new Promise(r => setTimeout(r, 300));
 
     // STEP 3: Type the search term to trigger the filter.
     await typeCharacterByCharacter(samplerInput, samplerName);
     console.log(`Finished typing "${samplerName}".`);
 
     // A brief pause to ensure the filter has been fully applied.
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 300));
 
     // STEP 4: Simulate pressing the "Arrow Down" key to highlight the first (and only) result.
     console.log("Simulating 'ArrowDown' key press...");
     samplerInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', bubbles: true }));
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 300));
     samplerInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowDown', code: 'ArrowDown', bubbles: true }));
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 300));
 
     // STEP 5: Simulate pressing the "Enter" key to select the highlighted option.
     console.log("Simulating 'Enter' key press...");
     samplerInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 300));
     samplerInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
+    await new Promise(r => setTimeout(r, 300));
+
+    console.log("Simulating 'Enter' key press...");
+    samplerInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+
+    // Give the component a moment to visually update from the 'Enter' key.
+    await new Promise(r => setTimeout(r, 250));
+
+    // Clicking the modal title is a safe and reliable way to do this.
+    console.log("😡 FORCING BLUR to commit sampler state...");
+    const modalTitle = modal.querySelector('.mantine-Modal-title');
+    if (modalTitle) {
+        modalTitle.click();
+    } else {
+        // Fallback if title isn't found for some reason
+        samplerInput.blur();
+    }
+
+    // Give the component another moment to process the blur event and lock in the state.
     await new Promise(r => setTimeout(r, 100));
+    console.log("✅ Sampler state should now be committed.");
 }
 
 /**
@@ -2551,145 +2904,7 @@ function setInputValue(element, value) {
     element.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-/**
- * Finds and clicks the "EDIT" button for the video prompt and verifies the modal opens.
- * This serves as a testbed for our form-filling logic.
- */
-async function initiateVideoMetadataFill() {
-    console.log("🚀 Starting prompt fill test...");
 
-    if (!videoContainerElement) {
-        statusSpan.textContent = "Error: Video container element not found. Please upload a video first.";
-        console.error("Video container element not found. Please upload a video first.");
-        return;
-    }
-
-    try {
-        // --- Step 1: Find the "Prompt" header element within our specific container ---
-        // This is robust because we are NOT searching the whole document.
-        const h3Elements = videoContainerElement.querySelectorAll('h3');
-        const promptHeader = Array.from(h3Elements).find(h => h.textContent.trim() === 'Prompt');
-
-        if (!promptHeader) {
-            statusSpan.textContent = "Error: 'Prompt' heading not found in video container.";
-            throw new Error("Could not find the 'Prompt' heading element inside the video container.");
-        }
-
-        // --- Step 2: Find the "EDIT" button, which is a sibling of the header ---
-        // We navigate to the header's parent, then find the button within that small scope.
-        const parentDiv = promptHeader.parentElement;
-        const editButton = parentDiv.querySelector('button');
-
-        if (!editButton || !editButton.textContent.includes('EDIT')) {
-            statusSpan.textContent = "Error: 'EDIT' button not found next to the prompt header.";
-            throw new Error("Could not find the 'EDIT' button next to the prompt header.");
-        }
-        console.log("✅ Found 'EDIT' button:", editButton);
-
-        // --- Step 3: Click the button and wait for the modal to appear ---
-        console.log("Clicking 'EDIT' button...");
-        editButton.click();
-
-        // The modal is a global element, so we can use a simpler selector here.
-        const modalContentSelector = 'section.mantine-Modal-content';
-        const modal = await waitForInteractiveElement(modalContentSelector, 5000);
-        console.log("✅ Successfully detected the prompt modal:", modal);
-
-        try {
-            // 1. Get the data from our extension's UI
-            const data = {
-                prompt: document.getElementById('ch-video-prompt').value,
-                negativePrompt: document.getElementById('ch-video-neg-prompt').value,
-                cfg: document.getElementById('ch-video-guidance').value,
-                steps: document.getElementById('ch-video-steps').value,
-                sampler: document.getElementById('ch-video-sampler').value,
-                seed: document.getElementById('ch-video-seed').value
-            };
-            console.log("📝 Data to fill:", data);
-
-            // 2. Fill the "simple" fields
-            setInputValue(modal.querySelector('#input_prompt'), data.prompt);
-            setInputValue(modal.querySelector('#input_negativePrompt'), data.negativePrompt);
-            setInputValue(modal.querySelector('#input_cfgScale'), data.cfg);
-            setInputValue(modal.querySelector('#input_steps'), data.steps);
-            setInputValue(modal.querySelector('#input_seed'), data.seed);
-            console.log("✅ Simple fields filled.");
-
-            // 3. Fill the "difficult" sampler field
-            const comfySampler = data.sampler.trim().toLowerCase();
-            const civitaiSampler = SAMPLER_MAP[comfySampler]; // Look it up in our dictionary
-
-            if (civitaiSampler) {
-                console.log(`✅ Sampler mapped: "${comfySampler}" -> "${civitaiSampler}"`);
-            } else {
-                console.warn(`Unmapped sampler: "${comfySampler}". Skipping sampler selection.`);
-            }
-
-            const MAX_SAMPLER_ATTEMPTS = 2; // We will try a maximum of two times.
-            let samplerSetCorrectly = false;
-
-            for (let i = 1; i <= MAX_SAMPLER_ATTEMPTS; i++) {
-                console.log(`Attempt ${i}/${MAX_SAMPLER_ATTEMPTS} to set sampler to "${civitaiSampler}"`);
-
-                // Perform one attempt to set the sampler.
-                await selectSampler(modal, civitaiSampler);
-
-                // Give the component a moment to update its value in the DOM after 'Enter'.
-                await new Promise(r => setTimeout(r, 200));
-
-                // VERIFY THE RESULT
-                const samplerInput = modal.querySelector('#input_sampler');
-                const currentValue = samplerInput ? samplerInput.value : '';
-                console.log(`Verification: Input value is now "${currentValue}"`);
-
-                if (currentValue === civitaiSampler) {
-                    samplerSetCorrectly = true;
-                    console.log("✅ Sampler set correctly.");
-                    break; // Success! Exit the loop.
-                } else {
-                    console.warn(`Sampler was not set correctly on attempt ${i}. Expected "${civitaiSampler}", got "${currentValue}".`);
-                    if (i < MAX_SAMPLER_ATTEMPTS) {
-                        console.log("Retrying...");
-                    }
-                }
-            }
-
-            if (!samplerSetCorrectly) {
-                console.error(`Failed to set sampler correctly after ${MAX_SAMPLER_ATTEMPTS} attempts. Continuing anyway.`);
-                // We don't throw an error, we just accept the failure and move on.
-            }
-
-            // 4. Handle the "onBlur" quirk and Save
-            const saveButton = Array.from(modal.querySelectorAll('button')).find(b => b.textContent === 'Save');
-            if (!saveButton) throw new Error("Could not find the 'Save' button in the modal.");
-
-            // Click the modal title to ensure the last input field loses focus (triggers onBlur)
-            const modalTitle = modal.querySelector('.mantine-Modal-title');
-            if (modalTitle) modalTitle.click();
-            await new Promise(r => setTimeout(r, 100)); // Short delay for safety
-
-            console.log("Clicking 'Save' button...");
-            saveButton.click();
-
-            // 5. Verify the modal closes
-            await waitForElementToDisappear(modalContentSelector, 5000);
-            console.log("🎉 Metadata modal filled and closed successfully!");
-            statusSpan.textContent = "Success! Video metadata has been filled.";
-
-        } catch (error) {
-            console.error("❌ Failed during metadata fill process:", error);
-            statusSpan.textContent = `Failed to fill metadata: ${error.message}`;
-            // Optionally, try to close the modal on failure
-            //const closeButton = modal.querySelector('button.mantine-Modal-close');
-            //if (closeButton) closeButton.click();
-        }
-
-
-    } catch (error) {
-        console.error("❌ Prompt fill test failed:", error);
-        statusSpan.textContent = `Prompt fill test failed: ${error.message}`;
-    }
-}
 
 /**
  * Searches the DOM for the unique "Edit/Preview" tab bar and returns its main parent container.
@@ -2794,6 +3009,11 @@ function readVideoMetadata(file) {
                     return resolve(null);
                 }
 
+                // Sanitize the prompts after they come back from the sandbox.
+                console.log("Sanitizing video prompts...");
+                extractedData.positive_prompt = sanitizePrompt(extractedData.positive_prompt);
+                extractedData.negative_prompt = sanitizePrompt(extractedData.negative_prompt);
+
                 console.log("✅ SUCCESS via sandbox:", extractedData);
                 resolve(extractedData);
             } else if (event.data.type === 'metadataError') {
@@ -2881,7 +3101,11 @@ pageObserver.observe(document.body, { childList: true, subtree: true });
 
 
 function checkUploadability() {
-    uploadButton.disabled = !videoToUpload;
+    // The buttons should be enabled if a video OR an image is present.
+    const enabled = videoToUpload || imageToUpload;
+    uploadButton.disabled = !enabled;
+    autoPostButton.disabled = !enabled;
+    scheduleButton.disabled = !enabled;
 }
 
 videoInput.addEventListener('change', async () => {
@@ -2911,12 +3135,13 @@ imageInput.addEventListener('change', async () => {
     checkUploadability();
 
     const imageSection = document.getElementById('ch-image-section');
+    if (imageSection) imageSection.style.display = 'block';
 
     if (imageToUpload) {
         if (!metadataModal) createMetadataModal();
         try {
             updateStatus("⏳ Reading image metadata...");
-            const metadata = await readImageMetadata(imageToUpload); // Your great parser
+            const metadata = await readImageMetadata(imageToUpload);
 
             if (metadata) {
                 // This single call now handles everything for the image section
@@ -2955,7 +3180,7 @@ autoPostButton.addEventListener('click', () => {
 // by coordinating the lifecycle manager for each file.
 // Handles UI state transitions and error reporting.
 async function runUploadOrchestrator() {
-    if (!videoToUpload) return;
+    if (!videoToUpload && !imageToUpload) return;
 
     uploadButton.style.display = 'none';
     openDetailsButton.style.display = 'inline-block';
@@ -2965,19 +3190,26 @@ async function runUploadOrchestrator() {
 
     setBannerToWorkingState();
     uploadButton.disabled = true; // Prevent double clicks
+    autoPostButton.disabled = true;
+    scheduleButton.disabled = true;
 
     try {
+        let grandparentContainer = null;
         const dryProgressSelector = 'div.w-full:has(.mantine-Dropzone-root) + div.mantine-Progress-root';
-        // --- VIDEO LIFECYCLE ---
-        // Step 1: Upload Video and get the "Grandparent" container
-        const videoResult = await manageUploadLifecycle({
-            file: videoToUpload,
-            name: 'Video',
-            progressSelector: dryProgressSelector,
-            successSelector: 'video[class*="EdgeMedia_responsive"]'
-        });
-        const grandparentContainer = videoResult.container;
-        console.log("✅ Grandparent container captured.", grandparentContainer);
+
+        // Run the video lifecycle IF a video was provided.
+        if (videoToUpload) {
+            // --- VIDEO LIFECYCLE ---
+            // Step 1: Upload Video and get the "Grandparent" container
+            const videoResult = await manageUploadLifecycle({
+                file: videoToUpload,
+                name: 'Video',
+                progressSelector: dryProgressSelector,
+                successSelector: 'video[class*="EdgeMedia_responsive"]'
+            });
+            grandparentContainer = videoResult.container;
+            console.log("✅ Grandparent container captured.", grandparentContainer);
+        }
 
         // --- IMAGE LIFECYCLE (only if an image is provided) ---
         // Step 2: Upload Image (if provided)
@@ -2988,6 +3220,15 @@ async function runUploadOrchestrator() {
                 progressSelector: dryProgressSelector,
                 successSelector: 'img[class*="EdgeImage_image"]'
             });
+            // If we didn't get it from the video, get it from the image
+            if (!grandparentContainer) {
+                grandparentContainer = imageResult.container;
+                console.log("✅ Grandparent container captured from image upload.");
+            }
+        }
+
+        if (!grandparentContainer) {
+            throw new Error("FATAL: Could not capture the grandparent container after uploads.");
         }
 
         // Step 3: Find the Content Area.
@@ -2998,9 +3239,13 @@ async function runUploadOrchestrator() {
                 contentArea = child;
                 break;
             }
+            if (!contentArea && imageToUpload && child.querySelector('img')) {
+                contentArea = child;
+                break;
+            }
         }
         if (!contentArea) throw new Error("FATAL: Could not find the main content area div.");
-        console.log("✅ Found main content area.", contentArea);     
+        console.log("✅ Found main content area.", contentArea);
 
         // Step 4: Find the specific containers by iterating through the DIRECT children of the Content Area.
         for (const child of contentArea.children) {
@@ -3033,8 +3278,8 @@ async function runUploadOrchestrator() {
         if (error.message === "AUTO-POST_INTERRUPTED") {
             updateStatus("🤖 Auto-post paused. Please add LoRA mappings.", false);
             openDetailsButton.style.display = 'inline-block';
-            return; 
-        }        
+            return;
+        }
         console.error('Orchestrator failed:', error);
         openDetailsButton.style.display = 'none';
         retryBannerButton.style.display = 'inline-block';
