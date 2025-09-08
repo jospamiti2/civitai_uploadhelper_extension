@@ -13,8 +13,8 @@ function parseComfyMetadata(commentData) {
 
     try {
         // 1. Double-parse the JSON data
-        const outerMetadata = JSON.parse(commentData);
-        const executedGraph = JSON.parse(outerMetadata.prompt);
+        const outerMetadata = JSON.parse(commentData.replaceAll(': NaN', ': null'));
+        const executedGraph = outerMetadata.prompt ? JSON.parse(outerMetadata.prompt): {};
         const fullWorkflow = outerMetadata.workflow;
 
         // Create a quick lookup map for workflow nodes by their ID for efficient access
