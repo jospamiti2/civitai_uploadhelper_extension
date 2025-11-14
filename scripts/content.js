@@ -2947,6 +2947,15 @@ async function selectSampler(modal, samplerName) {
     samplerInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowDown', code: 'ArrowDown', bubbles: true }));
     await new Promise(r => setTimeout(r, 300));
 
+    // if the sampler was "Euler" ... it needs two key downs as the first is euler a... and the second is euler
+    if (samplerName.toLowerCase() == "euler") {
+        console.log("Simulating SECOND 'ArrowDown' key press...");
+        samplerInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', bubbles: true }));
+        await new Promise(r => setTimeout(r, 300));
+        samplerInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowDown', code: 'ArrowDown', bubbles: true }));
+        await new Promise(r => setTimeout(r, 300));
+    }
+
     // STEP 5: Simulate pressing the "Enter" key to select the highlighted option.
     console.log("Simulating 'Enter' key press...");
     samplerInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));

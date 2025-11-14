@@ -7,7 +7,7 @@ let mediaInfoInstance = null;
  * @returns {object|null} A structured object with extracted metadata, or null if parsing fails.
  */
 function parseComfyMetadata(commentData) {
-    console.log("CommantDaza: " + commentData);
+    //console.log("CommantDaza: " + commentData);
     if (!commentData) {
         return null;
     }
