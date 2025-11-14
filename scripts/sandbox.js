@@ -7,14 +7,15 @@ let mediaInfoInstance = null;
  * @returns {object|null} A structured object with extracted metadata, or null if parsing fails.
  */
 function parseComfyMetadata(commentData) {
-   if (!commentData) {
+    console.log("CommantDaza: " + commentData);
+    if (!commentData) {
         return null;
     }
 
     try {
         // 1. Double-parse the JSON data
         const outerMetadata = JSON.parse(commentData.replaceAll(': NaN', ': null'));
-        const executedGraph = outerMetadata.prompt ? JSON.parse(outerMetadata.prompt): {};
+        const executedGraph = outerMetadata.prompt ? JSON.parse(outerMetadata.prompt) : {};
         const fullWorkflow = outerMetadata.workflow;
 
         // Create a quick lookup map for workflow nodes by their ID for efficient access
@@ -39,14 +40,13 @@ function parseComfyMetadata(commentData) {
                 if (!node) {
                     continue;
                 }
-                
+
                 // Store the node itself, keyed by its ID
                 ancestors.set(currentId, node);
 
                 // Add all linked input nodes to the queue for traversal
                 if (node.inputs) {
                     for (const input of Object.values(node.inputs)) {
-                        // An input is a link if it's an array with a string node ID at the first position
                         if (Array.isArray(input) && typeof input[0] === 'string') {
                             queue.push(input[0]);
                         }
@@ -54,124 +54,137 @@ function parseComfyMetadata(commentData) {
                 }
             }
             return Array.from(ancestors.values());
-        };        
+        };
 
         // --- Helper function to find the source of an input by tracing links ---
         const findUpstreamSourceNode = (startNodeId, inputName) => {
             let currentNode = executedGraph[startNodeId];
+            if (!currentNode) return null;
+
             let link = currentNode?.inputs?.[inputName];
-            
+
             // Traverse backwards through the graph following the link for the specified input
             while (link && executedGraph[link[0]]) {
-                currentNode = executedGraph[link[0]];
-                link = currentNode?.inputs?.[inputName];
-                // Stop if the current node IS the source (e.g., CLIPTextEncode)
-                if (currentNode.class_type === 'CLIPTextEncode') {
-                    return currentNode;
+                const parentNodeId = link[0];
+                const parentNode = executedGraph[parentNodeId];
+
+                // If the parent node is a text encode node, we found our source.
+                if (parentNode.class_type === 'CLIPTextEncode') {
+                    return parentNode;
+                }
+                
+                // For other nodes, see if they have the same input to continue tracing.
+                // This handles reroute nodes or other intermediate steps.
+                link = parentNode?.inputs?.[inputName];
+                
+                // If the input name doesn't exist on the parent, stop.
+                if (!link) {
+                    return parentNode; // Return the last node in the chain for this input.
                 }
             }
-            return currentNode;
+            return currentNode; // Fallback to the start node if no traversal happens
         };
 
-        // --- Helper function to trace the model and LoRA chain ---
-        const traceModelChain = (startNodeId) => {
-            const resources = {
-                base_model: null,
+        // 2. Find all KSampler nodes (standard and advanced)
+        const samplerNodes = Object.values(executedGraph).filter(node =>
+            node.class_type === "KSampler" || node.class_type === "KSamplerAdvanced"
+        );
+
+        if (samplerNodes.length === 0) {
+            return null; // No generation happened
+        }
+
+        // --- Identify the final sampler and the full chain ---
+        // A robust way is to find the VAE Decode node and trace back from its 'samples' input.
+        const vaeDecodeNode = Object.values(executedGraph).find(node => node.class_type === 'VAEDecode');
+        let finalSampler = null;
+        let finalSamplerId = null;
+
+        if (vaeDecodeNode && vaeDecodeNode.inputs.samples) {
+            const finalSamplerNodeId = vaeDecodeNode.inputs.samples[0];
+            finalSampler = executedGraph[finalSamplerNodeId];
+            finalSamplerId = finalSamplerNodeId;
+        } else {
+            // Fallback for workflows without a VAEDecode (e.g., latent outputs)
+            // Heuristic: The final sampler is the one not used as a latent input to another sampler.
+            const samplerIds = new Set(Object.keys(executedGraph).filter(id => executedGraph[id].class_type.includes("KSampler")));
+            const latentInputs = new Set();
+            samplerNodes.forEach(node => {
+                if (node.inputs.latent_image) {
+                    latentInputs.add(node.inputs.latent_image[0]);
+                }
+            });
+            const finalSamplerIds = [...samplerIds].filter(id => !latentInputs.has(id));
+            finalSamplerId = finalSamplerIds.length > 0 ? finalSamplerIds[0] : Object.keys(executedGraph).find(key => executedGraph[key] === samplerNodes[samplerNodes.length - 1]);
+            finalSampler = executedGraph[finalSamplerId];
+        }
+        
+        // Find the first sampler in the chain to get the initial seed
+        const samplerChain = findAllAncestors(finalSamplerId, executedGraph).filter(node =>
+            node.class_type === "KSampler" || node.class_type === "KSamplerAdvanced"
+        );
+        const firstSampler = samplerChain.length > 0 ? samplerChain[samplerChain.length - 1] : finalSampler;
+
+
+        // 3. Extract core generation parameters
+        const extractedData = {
+            seed: firstSampler.inputs.seed || firstSampler.inputs.noise_seed,
+            steps: finalSampler.inputs.steps,
+            cfg: finalSampler.inputs.cfg,
+            sampler_name: finalSampler.inputs.sampler_name,
+            scheduler: finalSampler.inputs.scheduler,
+            denoise: finalSampler.inputs.denoise,
+            positive_prompt: '',
+            negative_prompt: '',
+            technique: 'txt2img', // Default value
+            resources: {
+                base_models: [],
                 loras: [],
                 vae: null,
                 clip: null
-            };
-            let currentNodeId = startNodeId;
-            let chain = [];
-
-            // Follow the 'model' input chain all the way to the start
-            while (currentNodeId) {
-                const node = executedGraph[currentNodeId];
-                if (!node) break;
-                
-                chain.push(node);
-
-                // Find the next link in the chain
-                const modelInput = node.inputs.model || node.inputs.MODEL;
-                currentNodeId = modelInput ? modelInput[0] : null;
             }
-            
-            // Now, process the chain in forward order (from loader to KSampler)
-            chain.reverse();
-
-            for (const node of chain) {
-                 // Check if the node was bypassed in the full workflow definition
-                const workflowNode = workflowNodeMap[node.class_type === "KSampler" ? chain.find(n => n.inputs.model)?.inputs.model[0] : Object.keys(executedGraph).find(key => executedGraph[key] === node)];
-                const isBypassed = workflowNode && workflowNode.mode === 4;
-
-                switch (node.class_type) {
-                    case 'CheckpointLoaderSimple':
-                    case 'CheckpointLoader':
-                    case 'UNETLoader': // Your example uses this
-                        resources.base_model = node.inputs.ckpt_name || node.inputs.unet_name;
-                        break;
-                    case 'LoraLoaderModelOnly': // Your example uses this
-                    case 'LoraLoader':
-                        if (!isBypassed) {
-                            resources.loras.push(node.inputs.lora_name);
-                        }
-                        break;
-                    case 'VAELoader':
-                        resources.vae = node.inputs.vae_name;
-                        break;
-                    case 'CLIPLoader':
-                        resources.clip = node.inputs.clip_name;
-                        break;
-                }
-            }
-            
-            return resources;
-        };
-        
-        // 2. Find the final KSampler node
-        // A good heuristic: Find the last KSampler in the executed graph, as it's often the final one.
-        // A more robust method would be to find the SaveImage/VideoCombine node and trace back.
-        const kSamplerNodes = Object.values(executedGraph).filter(node => node.class_type === "KSampler");
-        if (kSamplerNodes.length === 0) {
-            return null; // No generation happened
-        }
-        const finalKSampler = kSamplerNodes[kSamplerNodes.length - 1];
-        const finalKSamplerId = Object.keys(executedGraph).find(key => executedGraph[key] === finalKSampler);
-
-        // 3. Extract core generation parameters from the KSampler
-        const extractedData = {
-            seed: finalKSampler.inputs.seed,
-            steps: finalKSampler.inputs.steps,
-            cfg: finalKSampler.inputs.cfg,
-            sampler_name: finalKSampler.inputs.sampler_name,
-            scheduler: finalKSampler.inputs.scheduler,
-            denoise: finalKSampler.inputs.denoise,
-            positive_prompt: '',
-            negative_prompt: '',
-            technique: 'txt2vid', // Default value,
-            resources: {}
         };
 
-        // 4. Trace and extract prompts
-        const positivePromptNode = findUpstreamSourceNode(finalKSamplerId, 'positive');
+        // 4. Trace and extract prompts from the final sampler
+        const positivePromptNode = findUpstreamSourceNode(finalSamplerId, 'positive');
         if (positivePromptNode && positivePromptNode.inputs.text) {
             extractedData.positive_prompt = positivePromptNode.inputs.text;
         }
 
-        const negativePromptNode = findUpstreamSourceNode(finalKSamplerId, 'negative');
+        const negativePromptNode = findUpstreamSourceNode(finalSamplerId, 'negative');
         if (negativePromptNode && negativePromptNode.inputs.text) {
             extractedData.negative_prompt = negativePromptNode.inputs.text;
         }
 
-        // 5. Trace the model chain to find base model and active LoRAs
-        const modelResources = traceModelChain(finalKSampler.inputs.model[0]);
-        extractedData.resources = {
-            base_model: modelResources.base_model,
-            loras: modelResources.loras
-            // You can add vae, clip etc. here if needed
-        };
+        // 5. Trace all resources from the entire sampler chain
+        const allSamplerAncestors = findAllAncestors(finalSamplerId, executedGraph);
+        
+        for (const node of allSamplerAncestors) {
+             const workflowNode = workflowNodeMap[Object.keys(executedGraph).find(key => executedGraph[key] === node)];
+             const isBypassed = workflowNode && workflowNode.mode === 4;
+             if (isBypassed) continue; // Skip bypassed nodes
 
-        // 6. Identify other resources from the graph that might not be in the model chain
+            switch (node.class_type) {
+                case 'CheckpointLoaderSimple':
+                case 'CheckpointLoader':
+                    extractedData.resources.base_models.push(node.inputs.ckpt_name);
+                    break;
+                case 'UNETLoader':
+                     extractedData.resources.base_models.push(node.inputs.unet_name);
+                    break;
+                case 'LoraLoaderModelOnly':
+                case 'LoraLoader':
+                    extractedData.resources.loras.push(node.inputs.lora_name);
+                    break;
+            }
+        }
+        
+        // Clean up duplicates
+        extractedData.resources.base_models = [...new Set(extractedData.resources.base_models)];
+        extractedData.resources.loras = [...new Set(extractedData.resources.loras)];
+
+
+        // 6. Identify other resources from the whole graph
         for (const node of Object.values(executedGraph)) {
             if (node.class_type === 'VAELoader') {
                 extractedData.resources.vae = node.inputs.vae_name;
@@ -181,17 +194,16 @@ function parseComfyMetadata(commentData) {
             }
         }
 
-        // 7. Determine the generation technique (img2vid, vid2vid, txt2vid)
-        if (finalKSampler.inputs.latent_image) {
-            const latentSourceNodeId = finalKSampler.inputs.latent_image[0];
+        // 7. Determine the generation technique
+        const latentInput = finalSampler.inputs.latent_image;
+        if (latentInput) {
+            const latentSourceNodeId = latentInput[0];
             const latentAncestors = findAllAncestors(latentSourceNodeId, executedGraph);
 
-            // Define known class types for each technique. This can be expanded.
-            const vidNodeTypes = ['LoadVideo', 'VHS_LoadVideo']; // For vid2vid
-            const imgNodeTypes = ['LoadImage', 'WanImageToVideo', 'WanFirstLastFrameToVideo']; // For img2vid
-            const emptyNodeTypes = ['EmptyLatentImage']; // For txt2vid
+            const vidNodeTypes = ['LoadVideo', 'VHS_LoadVideo'];
+            const imgNodeTypes = ['LoadImage', 'WanImageToVideo', 'WanFirstLastFrameToVideo'];
+            const emptyNodeTypes = ['EmptyLatentImage'];
 
-            // Check with priority: vid2vid > img2vid > txt2vid
             if (latentAncestors.some(node => vidNodeTypes.includes(node.class_type))) {
                 extractedData.technique = 'vid2vid';
             } else if (latentAncestors.some(node => imgNodeTypes.includes(node.class_type))) {
@@ -199,10 +211,9 @@ function parseComfyMetadata(commentData) {
             } else if (latentAncestors.some(node => emptyNodeTypes.includes(node.class_type))) {
                 extractedData.technique = 'txt2vid';
             }
-            // If none of these specific nodes are found, we stick with the default 'txt2vid',
-            // as it's the most basic form of generation.
-        }        
-
+        } else {
+             extractedData.technique = 'txt2img'; // Fallback if no latent input
+        }
 
         return extractedData;
 
@@ -211,7 +222,6 @@ function parseComfyMetadata(commentData) {
         return null; // Return null on any parsing error
     }
 }
-
 
 
 window.addEventListener('message', async (event) => {
