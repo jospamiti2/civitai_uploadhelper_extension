@@ -12,6 +12,8 @@ let imageContainerElement = null;
 let isAutoPostMode = false;
 let isSchedulePostMode = false;
 
+let isBannerScootchedOver = false;
+
 const SAMPLER_MAP = {
     // ComfyUI Name -> Civitai Name
 
@@ -303,10 +305,12 @@ banner.appendChild(scoochLink);
 
 scoochLink.addEventListener('click', (e) => {
     e.preventDefault();
+    isBannerScootchedOver = true;
     const originalDisplay = banner.style.display;
     banner.style.display = 'none';
     setTimeout(() => {
         banner.style.display = originalDisplay;
+        isBannerScootchedOver = false;
     }, 5000);
 });
 
@@ -1026,6 +1030,7 @@ async function fillVideoFields() {
         const MAX_TOOL_ATTEMPTS = 3;
         for (let attempt = 1; attempt <= MAX_TOOL_ATTEMPTS; attempt++) {
             try {
+                await new Promise(r => setTimeout(r, 200));
                 await addToolsFromList(videoTools); // Perform one full attempt
                 // Verify ALL tools were added
                 await Promise.all(videoTools.map(tool => waitForToolAdded(tool, 5000)));
@@ -1062,6 +1067,8 @@ async function fillVideoFields() {
                 }
 
                 console.log(`Attempt ${attempt}/${MAX_ATTEMPTS} to add technique "${selectedTechnique}"`);
+                await new Promise(r => setTimeout(r, 200));
+
                 await addTechnique(selectedTechnique, videoContainerElement);
                 await waitForTechniqueAdded(selectedTechnique, videoContainerElement);
                 techniqueSuccess = true;
@@ -1128,7 +1135,7 @@ async function initiateVideoMetadataFill() {
         // The modal is a global element, so we can use a simpler selector here.
         const modalContentSelector = 'section.mantine-Modal-content';
         const modal = await waitForInteractiveElement(modalContentSelector, 5000);
-        console.log("✅ Successfully detected the prompt modal:", modal);
+        console.log("✅ Successfully detected the prompt modal");
 
         try {
             // 1. Get the data from our extension's UI
@@ -1249,6 +1256,7 @@ async function fillImageFields() {
     // Add Image Tools
     const imageTools = getImageToolDataFromModal();
     if (imageTools.length > 0) {
+        await new Promise(r => setTimeout(r, 200));
         await addImageTools(imageTools);
         await Promise.all(imageTools.map(tool => waitForImageToolAdded(tool)));
         console.log("✅ All image tools successfully added and verified.");
@@ -1257,8 +1265,20 @@ async function fillImageFields() {
     // Add Image Technique
     const selectedImageTechnique = document.querySelector('input[name="ch-image-technique"]:checked')?.value;
     if (selectedImageTechnique) {
-        await addTechnique(selectedImageTechnique, imageContainerElement);
-        await waitForTechniqueAdded(selectedImageTechnique, imageContainerElement);
+        let retryCounterTechnique = 0;
+        let wasTechniqueAdded = false;
+
+        while (retryCounterTechnique < 6 && wasTechniqueAdded == false) {
+            try {
+                await new Promise(r => setTimeout(r, 200));
+                await addTechnique(selectedImageTechnique, imageContainerElement);
+                await waitForTechniqueAdded(selectedImageTechnique, imageContainerElement);
+                wasTechniqueAdded = true;
+            } catch (error) {
+                console.log("An error oocured while adding techniques for the image: ", error);                
+            }
+            retryCounterTechnique++;
+        }
     }
 }
 
@@ -1327,8 +1347,19 @@ async function initiateImageMetadataFill() {
 
     const initialSaveButton = Array.from(modal.querySelectorAll('button')).find(b => b.textContent === 'Save');
     if (!initialSaveButton) throw new Error("Could not find the 'Save' button in the image modal.");
-    initialSaveButton.click();
-    await waitForElementToDisappear(modalContentSelector, 5000);
+
+    let retryCounterDisappearPrompt = 0;
+    let didPromptPopupDisappear = false;
+    while (retryCounterDisappearPrompt < 6 && didPromptPopupDisappear == false) {
+        initialSaveButton.click();
+        try {
+            await waitForElementToDisappear(modalContentSelector, 5000);
+            didPromptPopupDisappear = true;
+        } catch(error) {
+            console.log("Error while waiting for prompt popup to disappear: ", error);
+        }
+        retryCounterDisappearPrompt++;
+    }
     console.log("✅ Initial fill complete. Now, we verify.");
 
     // --- Step 3: The ANGRY Verification and Retry Loop ---
@@ -1674,6 +1705,7 @@ async function addImageTools(toolList) {
     if (toolList.length === 0) return;
 
     updateStatus(`⏳ Adding ${toolList.length} image tools...`);
+    await new Promise(r => setTimeout(r, 200));
 
     // 1. Find and click the "TOOL" button in the IMAGE container.
     const toolHeader = Array.from(imageContainerElement.querySelectorAll('h3')).find(h => h.textContent.trim() === 'Tools');
@@ -1684,9 +1716,26 @@ async function addImageTools(toolList) {
     if (!addToolButton) throw new Error("Could not find 'TOOL' button for the image.");
 
     addToolButton.click();
+    await new Promise(r => setTimeout(r, 200));
 
     // 2. Wait for the popover.
-    const popover = await waitForInteractiveElement('div[id^="headlessui-popover-panel-"]', 5000);
+    let retries = 0;
+    let popover = null;
+    while (popover == null && retries < 6)
+    {
+      try {
+        popover = await waitForInteractiveElement('div[id^="headlessui-popover-panel-"]', 5000);
+      } catch (error) {
+        console.log("Error while waiting for interactiveLement: ", error);
+        updateStatus(`⏳ opening tools dialog failed... `);
+      }
+      if (popover == null){
+        updateStatus(`⏳ trying again to open tools dialog. Attempt number: ` + retries);
+        retries++;
+        addToolButton.click();
+        await new Promise(r => setTimeout(r, 200));
+      }
+    }
 
     // 3. Select all the tools.
     let selectedCount = 0;
@@ -1701,11 +1750,24 @@ async function addImageTools(toolList) {
             console.warn(`Could not find image tool "${toolName}". Skipping.`);
         }
     }
+    await new Promise(r => setTimeout(r, 200));
 
+    let retriesClose = 0;
     if (selectedCount === 0) {
-        addToolButton.click(); // Close if nothing was selected
-        await waitForElementToDisappear('div[id^="headlessui-popover-panel-"]', 3000);
-        return;
+        while (retriesClose < 5) {
+            try {
+                updateStatus(`⏳ Trying to close tools dialog with no selected tools`);
+                await new Promise(r => setTimeout(r, 200));
+                addToolButton.click(); // Close if nothing was selected
+                await new Promise(r => setTimeout(r, 200));
+                await waitForElementToDisappear('div[id^="headlessui-popover-panel-"]', 3000);
+                return;
+            } catch {
+                updateStatus(`⏳ Will try to close the tools dialog again. Attempt number: ` + retriesClose);
+                await new Promise(r => setTimeout(r, 200));
+            }
+            retriesClose++;
+        }
     }
 
     // 4. Click "Add" N times.
@@ -1713,13 +1775,24 @@ async function addImageTools(toolList) {
     if (!saveButton) throw new Error("Could not find the 'Add' button for image tools.");
 
     console.log(`😡 Found image tools 'Add' button. Clicking it ${selectedCount} times...`);
-    for (let i = 0; i < selectedCount; i++) {
-        saveButton.click();
-        await new Promise(r => setTimeout(r, 100));
-    }
+     
+    let didElementDisappear = false;
+    while (retriesClose < 6 && didElementDisappear == false) {
+        try {
+            for (let i = 0; i < selectedCount; i++) {
+                saveButton.click();
+                await new Promise(r => setTimeout(r, 100));
+            }
+            await new Promise(r => setTimeout(r, 200));
 
-    await waitForElementToDisappear('div[id^="headlessui-popover-panel-"]', 3000);
-    console.log("✅ Image tools popover closed.");
+            await waitForElementToDisappear('div[id^="headlessui-popover-panel-"]', 3000);
+            didElementDisappear = true;
+            console.log("✅ Image tools popover closed.");
+        } catch {
+            updateStatus(`⏳ Saving the selection failed. Attempt number: ` + retriesClose);
+        }
+        retriesClose++;
+    }
 }
 
 
@@ -2104,6 +2177,7 @@ function readImageMetadata(file) {
  */
 async function addTechnique(techniqueName, containerElement) {
     if (!containerElement) throw new Error("Video container element not found.");
+    await new Promise(r => setTimeout(r, 200));
 
     // 1. Find and click the "TECHNIQUE" button.
     console.log("Finding 'TECHNIQUE' button...");
@@ -2118,11 +2192,13 @@ async function addTechnique(techniqueName, containerElement) {
 
     addButton.click();
     console.log("✅ Clicked 'TECHNIQUE' button.");
+    await new Promise(r => setTimeout(r, 250));
 
     // 2. Wait for the popover to appear.
     const popoverSelector = 'div[id^="headlessui-popover-panel-"]';
     const popover = await waitForInteractiveElement(popoverSelector, 5000);
     console.log("✅ Techniques popover is visible.");
+    await new Promise(r => setTimeout(r, 250));
 
     // 3. Find and click the correct option. The text is in a direct child span.
     const allOptions = popover.querySelectorAll('div[role="option"]');
@@ -2141,12 +2217,23 @@ async function addTechnique(techniqueName, containerElement) {
     const saveButton = Array.from(popover.querySelectorAll('button')).find(b => b.textContent.trim() === 'Add');
     if (!saveButton) throw new Error("Could not find the 'Add' button in the techniques popover.");
 
-    console.log("😡 Found 'Add' button. Clicking it.");
-    saveButton.click();
+    let retiresClose = 0;
+    let didElementDisappear = false;
 
-    // 5. Wait for the popover to disappear.
-    await waitForElementToDisappear(popoverSelector, 3000);
-    console.log("✅ Techniques popover has closed.");
+    while (retiresClose < 6 && didElementDisappear == false) {
+        console.log("😡 Found 'Add' button. Clicking it.");
+        saveButton.click();
+
+        // 5. Wait for the popover to disappear.
+        try {
+        await waitForElementToDisappear(popoverSelector, 3000);
+        } catch (error) {
+            console.log("Error while waiting got the Image techniques popup to disappear... retrying");
+        }
+        didElementDisappear = true;
+        retiresClose++;
+        console.log("✅ Techniques popover has closed.");
+    }
 }
 
 /**
@@ -2160,7 +2247,7 @@ function waitForTechniqueAdded(techniqueName, containerElement) {
         const checkInterval = 250;
         const timeoutId = setTimeout(() => {
             clearInterval(intervalId);
-            reject(new Error(`Verification Timeout: Technique "${techniqueName}" did not appear on the page within ${timeout}ms.`));
+            reject(new Error(`Verification Timeout: Technique "${techniqueName}" did not appear on the page within ${timeout}ms. in:`, containerElement));
         }, timeout);
 
         const intervalId = setInterval(() => {
@@ -2172,7 +2259,7 @@ function waitForTechniqueAdded(techniqueName, containerElement) {
             if (!container) return;
 
             // Find all spans inside list items. This is robust.
-            const addedElements = container.querySelectorAll('li span');
+            const addedElements = container.querySelectorAll('span');
             const isPresent = Array.from(addedElements).some(span => span.textContent.trim().toLowerCase() === techniqueName.toLowerCase());
 
             if (isPresent) {
@@ -2334,7 +2421,8 @@ function createToolCheckbox(toolName, prefix) {
  */
 async function addToolsFromList(toolList) {
     if (!videoContainerElement) throw new Error("Video container element not found.");
-    if (toolList.length === 0) return;
+    if (toolList.length === 0) return
+    await new Promise(r => setTimeout(r, 200));
 
     // 1. Find the "TOOL" button specifically in the "Tools" section. No variables.
     console.log("Finding 'TOOL' button...");
@@ -2346,7 +2434,9 @@ async function addToolsFromList(toolList) {
     const addToolButton = Array.from(addButtonContainer.querySelectorAll('button')).find(b => b.innerText.trim() === 'TOOL');
     if (!addToolButton) throw new Error("Could not find the 'TOOL' button.");
 
+    await new Promise(r => setTimeout(r, 500));
     addToolButton.click();
+    await new Promise(r => setTimeout(r, 500));
     console.log("✅ Clicked 'TOOL' button.");
 
     // 2. Wait for the popover to appear. It's in a portal.
@@ -2790,14 +2880,14 @@ async function typeCharacterByCharacter(element, text) {
  */
 function waitForInteractiveElement(selector, timeout) {
     return new Promise((resolve, reject) => {
-        const checkInterval = 100; // Check every 100ms
-        const timeoutId = setTimeout(() => {
+        let checkInterval = 100; // Check every 100ms
+        let timeoutId = setTimeout(() => {
             clearInterval(intervalId);
             reject(new Error(`Timeout: Interactive element "${selector}" did not appear within ${timeout}ms.`));
         }, timeout);
 
-        const intervalId = setInterval(() => {
-            const element = document.querySelector(selector);
+        let intervalId = setInterval(() => {
+            let element = document.querySelector(selector);
             // Wait for the element to exist AND for its animation to complete (opacity is 1).
             if (element && window.getComputedStyle(element).opacity === '1') {
                 clearInterval(intervalId);
@@ -3049,7 +3139,7 @@ function checkPageAndToggleBanner() {
     const isUploadPage =
         (window.location.href.startsWith('https://civitai.com/posts/create') ||
             (window.location.href.startsWith('https://civitai.com/posts/') && (window.location.href.indexOf('/edit?video=true') > 0)));
-    if (banner) {
+    if (banner && !isBannerScootchedOver) {
         banner.style.display = isUploadPage ? 'flex' : 'none';
     }
 }
