@@ -1956,12 +1956,14 @@ async function populateImageModalData(data) {
 }
 
 /**
- * Reads and parses metadata from a ComfyUI PNG file by manually finding the 'tEXt' chunk.
- * This version traces the workflow backward from the SaveImage node to handle complex workflows.
+ * Reads and parses metadata from a ComfyUI PNG file.
+ * This version recursively traces the workflow to handle complex, dynamic prompts
+ * and varying node structures.
  * @param {File} file The PNG image file to parse.
  * @returns {Promise<object|null>} A promise that resolves with the parsed workflow object, or null.
  */
 function readImageMetadata(file) {
+    console.log("IMAGE METADATA: " + file);
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
 
@@ -1980,7 +1982,7 @@ function readImageMetadata(file) {
                 let offset = 8;
                 let workflowJSON = null;
 
-                // Loop through the PNG chunks to find the 'tEXt' chunk with the 'prompt' keyword
+                // Loop through PNG chunks to find the 'tEXt' chunk with 'prompt' data
                 while (offset < view.byteLength) {
                     const length = view.getUint32(offset);
                     const type = String.fromCharCode(view.getUint8(offset + 4), view.getUint8(offset + 5), view.getUint8(offset + 6), view.getUint8(offset + 7));
@@ -1998,10 +2000,7 @@ function readImageMetadata(file) {
                     }
 
                     offset += 12 + length; // Move to the next chunk
-
-                    if (type === 'IEND') {
-                        break; // End of image chunks
-                    }
+                    if (type === 'IEND') break;
                 }
 
                 if (!workflowJSON) {
@@ -2010,140 +2009,163 @@ function readImageMetadata(file) {
                     return;
                 }
 
-                const workflow = JSON.parse(workflowJSON);
+                const cleanJSON = workflowJSON
+                    .replace(/:\s*NaN\b/g, ": null")
+                    .replace(/:\s*-?Infinity\b/g, ": null"); 
 
-                // Find the final SaveImage node
-                let saveImageNodeId = null;
-                for (const nodeId in workflow) {
-                    if (workflow[nodeId].class_type === 'SaveImage') {
-                        // In a complex workflow, there might be multiple SaveImage nodes.
-                        // A more robust solution might be needed if that's a common case.
-                        // For now, we'll take the first one we find.
-                        saveImageNodeId = nodeId;
-                        break;
+                const workflow = JSON.parse(cleanJSON);
+                console.log("IMAGE WORKFLOW: ", workflow);
+
+                // --- Helper function to recursively trace and build the prompt string ---
+                const getFullPromptText = (startNodeId, workflow) => {
+                    const visited = new Set(); // To prevent infinite loops in complex graphs
+
+                    function trace(nodeId) {
+                        if (!nodeId || visited.has(nodeId)) return '';
+                        visited.add(nodeId);
+
+                        const node = workflow[nodeId];
+                        if (!node) return '';
+
+                        // Base case: The node has a direct text value (e.g., Text Multiline)
+                        if (node.inputs && typeof node.inputs.text === 'string') {
+                            return node.inputs.text;
+                        }
+
+                        // Recursive cases for different node types that manipulate text
+                        switch (node.class_type) {
+                            case 'CLIPTextEncode':
+                                // This handles both old (string) and new (link) workflows
+                                if (node.inputs && Array.isArray(node.inputs.text)) {
+                                    return trace(node.inputs.text[0]);
+                                } else if (node.inputs && typeof node.inputs.text === 'string') {
+                                    return node.inputs.text;
+                                }
+                                break;
+
+                            case 'Text Concatenate': {
+                                const delimiter = node.inputs.delimiter || ", ";
+                                let parts = [];
+                                ['text_a', 'text_b', 'text_c', 'text_d', 'text_e'].forEach(key => {
+                                    if (node.inputs[key] && Array.isArray(node.inputs[key])) {
+                                        parts.push(trace(node.inputs[key][0]));
+                                    }
+                                });
+                                return parts.filter(p => p).join(delimiter);
+                            }
+
+                            case 'ImpactSwitch': {
+                                if (!node.inputs.select || !Array.isArray(node.inputs.select)) return '';
+                                
+                                const selectorNodeId = node.inputs.select[0];
+                                const selectorNode = workflow[selectorNodeId];
+                                
+                                if (selectorNode && selectorNode.inputs && 'value' in selectorNode.inputs) {
+                                    const selectedIndex = selectorNode.inputs.value;
+                                    const selectedInputName = `input${selectedIndex}`;
+                                    if (node.inputs[selectedInputName] && Array.isArray(node.inputs[selectedInputName])) {
+                                        return trace(node.inputs[selectedInputName][0]);
+                                    }
+                                }
+                                return '';
+                            }
+                        }
+                        return ''; // Return empty string if no text can be resolved
                     }
-                }
+                    return trace(startNodeId);
+                };
 
+                // --- Helper function to trace the model/LoRA chain ---
+                const traceModelChain = (startNode, workflow) => {
+                    const resources = { base_model: null, loras: [] };
+                    let currentNode = startNode;
+                    let visited = new Set(); // Prevent loops
+
+                    while (currentNode) {
+                        const currentNodeId = Object.keys(workflow).find(key => workflow[key] === currentNode);
+                        if (!currentNodeId || visited.has(currentNodeId)) break;
+                        visited.add(currentNodeId);
+
+                        const isBypassed = currentNode.mode === 2 || currentNode.mode === 4;
+
+                        if (!isBypassed) {
+                            if (currentNode.class_type === 'LoraLoader') {
+                                resources.loras.push(currentNode.inputs.lora_name);
+                            } else if (currentNode.class_type === 'CheckpointLoaderSimple') {
+                                resources.base_model = currentNode.inputs.ckpt_name;
+                                break; // Found the root checkpoint
+                            }
+                        }
+
+                        if (currentNode.inputs && currentNode.inputs.model && Array.isArray(currentNode.inputs.model)) {
+                            const modelInputNodeId = currentNode.inputs.model[0];
+                            currentNode = workflow[modelInputNodeId];
+                        } else {
+                            break; // End of the chain
+                        }
+                    }
+                    resources.loras.reverse(); // Order from checkpoint to KSampler
+                    return resources;
+                };
+
+                // --- Main Parsing Logic ---
+
+                // 1. Find the final SaveImage node
+                const saveImageNodeId = Object.keys(workflow).find(id => workflow[id].class_type === 'SaveImage');
                 if (!saveImageNodeId) {
                     console.log("Could not find SaveImage node in the workflow.");
                     resolve(null);
                     return;
                 }
 
-                // Function to trace back through the workflow from a given node and input
-                const findUpstreamNode = (startNodeId, inputName, targetClassType) => {
-                    let currentNodeId = startNodeId;
-                    while (currentNodeId) {
-                        const currentNode = workflow[currentNodeId];
-                        if (!currentNode || !currentNode.inputs || !currentNode.inputs[inputName]) {
-                            return null;
-                        }
-                        const upstreamNodeId = currentNode.inputs[inputName][0];
-                        const upstreamNode = workflow[upstreamNodeId];
+                // 2. Trace backwards from SaveImage to find the KSampler
+                const findUpstreamAncestor = (startNodeId, targetClassType) => {
+                    const queue = [startNodeId];
+                    const visited = new Set();
+                    while (queue.length > 0) {
+                        const currentId = queue.shift();
+                        if (!currentId || visited.has(currentId)) continue;
+                        visited.add(currentId);
 
-                        if (upstreamNode.class_type === targetClassType) {
-                            return upstreamNode;
-                        }
-                        currentNodeId = upstreamNodeId; // Continue traversing up
-                    }
-                    return null;
-                };
-
-                // Function to trace back and find all *active* LoRAs
-                const findAllUpstreamLoras = (startNode) => {
-                    const loras = [];
-                    let currentNode = startNode;
-                    while (currentNode && currentNode.inputs && currentNode.inputs.model) {
-                        const modelInputNodeId = currentNode.inputs.model[0];
-                        const modelInputNode = workflow[modelInputNodeId];
-                        if (modelInputNode) {
-                            // A node's mode is 0 for active, 2 for bypassed.
-                            if (modelInputNode.class_type === 'LoraLoader' && modelInputNode.mode !== 2) {
-                                loras.push(modelInputNode.inputs.lora_name);
-                            }
-                            currentNode = modelInputNode;
-                        } else {
-                            break;
-                        }
-                    }
-                    return loras;
-                };
-
-                // Trace back from SaveImage to find the KSampler
-                console.log("Tracing back from SaveImage node:", saveImageNodeId);
-                const vaeDecodeNodeId = workflow[saveImageNodeId].inputs.images[0];
-                let ksamplerNodeId = null;
-                if (workflow[vaeDecodeNodeId].class_type !== 'VAEDecode') {
-                    const parentOfVaeDecode = workflow[vaeDecodeNodeId];
-                    const parentOfVaeDecideInputImage = parentOfVaeDecode.inputs?.image[0];
-                    const parentOfVaeDecideInputImageNode = workflow[parentOfVaeDecideInputImage];
-                    if (parentOfVaeDecideInputImageNode && parentOfVaeDecideInputImageNode.class_type == 'VAEDecode') {
-                        if (parentOfVaeDecideInputImageNode.inputs && parentOfVaeDecideInputImageNode.inputs.samples) {
-                            if (parentOfVaeDecideInputImageNode.inputs.samples.length > 0) {
-                                if (workflow[parentOfVaeDecideInputImageNode.inputs.samples[0]].class_type === 'KSampler') {
-                                    console.log("Found KSampler node via VAEDecode image input:", parentOfVaeDecideInputImageNode.inputs.samples[0]);
-                                    ksamplerNodeId = parentOfVaeDecideInputImageNode.inputs.samples[0];
+                        const node = workflow[currentId];
+                        if (!node) continue;
+                        if (node.class_type === targetClassType) return { id: currentId, node: node };
+                        
+                        if (node.inputs) {
+                            for (const input of Object.values(node.inputs)) {
+                                if (Array.isArray(input) && typeof input[0] === 'string') {
+                                    queue.push(input[0]);
                                 }
                             }
                         }
-                    } else {
-                        console.log("Could not trace back to a VAEDecode node.");
-                        resolve(null);
-                        return;
                     }
-                } else {
-                    ksamplerNodeId = workflow[vaeDecodeNodeId].inputs.samples[0];
-                    console.log("Found KSampler node:", ksamplerNodeId);
-                }
-                if (!ksamplerNodeId == null) {
-                    console.log("KSampler node ID is null.");
-                    resolve(null);
-                    return;
-                }
-                const ksamplerNode = workflow[ksamplerNodeId];
-                console.log("KSampler node details:", ksamplerNode);
+                    return null;
+                };
+                
+                const ksamplerInfo = findUpstreamAncestor(saveImageNodeId, 'KSampler');
 
-                if (ksamplerNode.class_type !== 'KSampler' && ksamplerNode.class_type !== "SamplerCustomAdvanced") {
+                if (!ksamplerInfo) {
                     console.log("Could not trace back to a KSampler node.");
                     resolve(null);
                     return;
                 }
-
+                
+                const ksamplerNode = ksamplerInfo.node;
                 const ksamplerInputs = ksamplerNode.inputs;
+                console.log("Found KSampler node:", ksamplerInfo.id, ksamplerNode);
 
-
-                console.log("KSampler inputs:", ksamplerInputs);
+                // 3. Get positive and negative prompts using the new recursive function
                 const posPromptNodeKey = ksamplerInputs.positive[0];
-                console.log("Positive prompt node key:", posPromptNodeKey);
                 const negPromptNodeKey = ksamplerInputs.negative[0];
-                console.log("Negative prompt node key:", negPromptNodeKey);
+                
+                const positive_prompt = getFullPromptText(posPromptNodeKey, workflow);
+                const negative_prompt = getFullPromptText(negPromptNodeKey, workflow);
 
-                const original_positive_prompt = workflow[posPromptNodeKey]?.inputs.text || '';
-                const original_negative_prompt = workflow[negPromptNodeKey]?.inputs.text || '';
-                const positive_prompt = sanitizePrompt(original_positive_prompt);
-                const negative_prompt = sanitizePrompt(original_negative_prompt);
                 console.log("Extracted positive prompt:", positive_prompt);
                 console.log("Extracted negative prompt:", negative_prompt);
 
-                // Trace back to find the base model
-                let baseModelNode = null;
-                let currentNodeToCheck = ksamplerNode;
-                while (currentNodeToCheck && currentNodeToCheck.inputs && currentNodeToCheck.inputs.model) {
-                    console.log("Checking node for base model:", currentNodeToCheck);
-                    const modelInputNodeId = currentNodeToCheck.inputs.model[0];
-                    console.log("Model input node ID:", modelInputNodeId);
-                    const modelInputNode = workflow[modelInputNodeId];
-                    if (modelInputNode.class_type === 'CheckpointLoaderSimple') {
-                        baseModelNode = modelInputNode;
-                        break;
-                    }
-                    currentNodeToCheck = modelInputNode;
-                }
-
-                const base_model = baseModelNode ? baseModelNode.inputs.ckpt_name : null;
-
-                // Find all LoRAs by tracing back the model connections
-                const loras = findAllUpstreamLoras(ksamplerNode);
+                // 4. Get base model and LoRAs
+                const modelResources = traceModelChain(ksamplerNode, workflow);
 
                 const parsedData = {
                     positive_prompt,
@@ -2153,8 +2175,8 @@ function readImageMetadata(file) {
                     scheduler: ksamplerInputs.scheduler,
                     cfg: ksamplerInputs.cfg,
                     seed: ksamplerInputs.seed,
-                    base_model: base_model,
-                    loras: loras.reverse(),
+                    base_model: modelResources.base_model,
+                    loras: modelResources.loras,
                 };
 
                 console.log("✅ Successfully parsed PNG workflow:", parsedData);
