@@ -231,7 +231,19 @@ function parseComfyMetadata(commentData) {
             } else if (node.class_type === 'UNETLoader' || node.class_type === 'UnetLoaderGGUF') {
                  extractedData.resources.base_models.push(resolveValue(node.inputs.unet_name));
             } else if (node.class_type === 'LoraLoaderModelOnly' || node.class_type === 'LoraLoader') {
+                // Standard Lora Loader
                 extractedData.resources.loras.push(resolveValue(node.inputs.lora_name));
+            } else if (node.class_type === 'Power Lora Loader (rgthree)') {
+                // Power Lora Loader Logic
+                // Iterate through all inputs to find defined LoRAs
+                if (node.inputs) {
+                    for (const val of Object.values(node.inputs)) {
+                        // rgthree stores loras as objects: { "on": true, "lora": "filename.safetensors", "strength": 1 }
+                        if (val && typeof val === 'object' && val.lora && val.on === true) {
+                            extractedData.resources.loras.push(resolveValue(val.lora));
+                        }
+                    }
+                }
             }
         }
         
