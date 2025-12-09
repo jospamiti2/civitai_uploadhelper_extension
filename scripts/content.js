@@ -1963,7 +1963,7 @@ async function populateImageModalData(data) {
  * @returns {Promise<object|null>} A promise that resolves with the parsed workflow object, or null.
  */
 function readImageMetadata(file) {
-    console.log("IMAGE METADATA: " + file);
+    // console.log("IMAGE METADATA: " + file);
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
 
@@ -2011,14 +2011,14 @@ function readImageMetadata(file) {
 
                 const cleanJSON = workflowJSON
                     .replace(/:\s*NaN\b/g, ": null")
-                    .replace(/:\s*-?Infinity\b/g, ": null"); 
+                    .replace(/:\s*-?Infinity\b/g, ": null");
 
                 const workflow = JSON.parse(cleanJSON);
-                console.log("IMAGE WORKFLOW: ", workflow);
+                //console.log("IMAGE cleanJSON: ", cleanJSON);
 
                 // --- Helper function to recursively trace and build the prompt string ---
                 const getFullPromptText = (startNodeId, workflow) => {
-                    const visited = new Set(); // To prevent infinite loops in complex graphs
+                    const visited = new Set(); 
 
                     function trace(nodeId) {
                         if (!nodeId || visited.has(nodeId)) return '';
@@ -2027,15 +2027,12 @@ function readImageMetadata(file) {
                         const node = workflow[nodeId];
                         if (!node) return '';
 
-                        // Base case: The node has a direct text value (e.g., Text Multiline)
                         if (node.inputs && typeof node.inputs.text === 'string') {
                             return node.inputs.text;
                         }
 
-                        // Recursive cases for different node types that manipulate text
                         switch (node.class_type) {
                             case 'CLIPTextEncode':
-                                // This handles both old (string) and new (link) workflows
                                 if (node.inputs && Array.isArray(node.inputs.text)) {
                                     return trace(node.inputs.text[0]);
                                 } else if (node.inputs && typeof node.inputs.text === 'string') {
@@ -2056,10 +2053,10 @@ function readImageMetadata(file) {
 
                             case 'ImpactSwitch': {
                                 if (!node.inputs.select || !Array.isArray(node.inputs.select)) return '';
-                                
+
                                 const selectorNodeId = node.inputs.select[0];
                                 const selectorNode = workflow[selectorNodeId];
-                                
+
                                 if (selectorNode && selectorNode.inputs && 'value' in selectorNode.inputs) {
                                     const selectedIndex = selectorNode.inputs.value;
                                     const selectedInputName = `input${selectedIndex}`;
@@ -2070,16 +2067,16 @@ function readImageMetadata(file) {
                                 return '';
                             }
                         }
-                        return ''; // Return empty string if no text can be resolved
+                        return ''; 
                     }
                     return trace(startNodeId);
                 };
 
-                // --- Helper function to trace the model/LoRA chain ---
+                // --- UPDATED Helper function to trace the model/LoRA chain ---
                 const traceModelChain = (startNode, workflow) => {
                     const resources = { base_model: null, loras: [] };
                     let currentNode = startNode;
-                    let visited = new Set(); // Prevent loops
+                    let visited = new Set(); 
 
                     while (currentNode) {
                         const currentNodeId = Object.keys(workflow).find(key => workflow[key] === currentNode);
@@ -2089,14 +2086,47 @@ function readImageMetadata(file) {
                         const isBypassed = currentNode.mode === 2 || currentNode.mode === 4;
 
                         if (!isBypassed) {
+                            // CASE 1: Standard Single Lora Loader
                             if (currentNode.class_type === 'LoraLoader') {
-                                resources.loras.push(currentNode.inputs.lora_name);
-                            } else if (currentNode.class_type === 'CheckpointLoaderSimple') {
+                                if (currentNode.inputs.lora_name) {
+                                    resources.loras.push(currentNode.inputs.lora_name);
+                                }
+                            } 
+                            // CASE 2: Power Lora Loader (rgthree)
+                            else if (currentNode.class_type === 'Power Lora Loader (rgthree)') {
+                                const inputs = currentNode.inputs;
+                                const nodeLoras = [];
+
+                                // Iterate over keys to find "lora_1", "lora_2", etc.
+                                for (const key in inputs) {
+                                    // Check if key starts with "lora_" and the value is an object with "on": true
+                                    if (key.startsWith('lora_') && inputs[key] && typeof inputs[key] === 'object') {
+                                        if (inputs[key].on === true && inputs[key].lora) {
+                                            // Extract the number (e.g. 1 from lora_1) to sort correctly
+                                            const index = parseInt(key.split('_')[1], 10);
+                                            nodeLoras.push({ index: index, name: inputs[key].lora });
+                                        }
+                                    }
+                                }
+
+                                // Sort by index (1, 2, 3...) to ensure order matches user config
+                                nodeLoras.sort((a, b) => a.index - b.index);
+
+                                // Because we traverse backwards (Sampler -> Model) and reverse at the end,
+                                // we need to push these in Reverse Index Order so they come out correctly 
+                                // when the final array is reversed.
+                                // Expected Final: [Lora1, Lora2, Base]
+                                // Traversal Stack: [Lora2, Lora1, Base] -> Reversed -> [Base, Lora1, Lora2]
+                                nodeLoras.reverse().forEach(l => resources.loras.push(l.name));
+                            }
+                            // CASE 3: Checkpoint Loader
+                            else if (currentNode.class_type === 'CheckpointLoaderSimple' || currentNode.class_type === 'CheckpointLoader') {
                                 resources.base_model = currentNode.inputs.ckpt_name;
                                 break; // Found the root checkpoint
                             }
                         }
 
+                        // Traverse upstream via 'model' input
                         if (currentNode.inputs && currentNode.inputs.model && Array.isArray(currentNode.inputs.model)) {
                             const modelInputNodeId = currentNode.inputs.model[0];
                             currentNode = workflow[modelInputNodeId];
@@ -2110,8 +2140,12 @@ function readImageMetadata(file) {
 
                 // --- Main Parsing Logic ---
 
-                // 1. Find the final SaveImage node
-                const saveImageNodeId = Object.keys(workflow).find(id => workflow[id].class_type === 'SaveImage');
+                // 1. Find the final SaveImage node (or Image Save)
+                // Note: Modified to also look for 'Image Save' which acts like SaveImage
+                const saveImageNodeId = Object.keys(workflow).find(id => 
+                    workflow[id].class_type === 'SaveImage' || workflow[id].class_type === 'Image Save'
+                );
+                
                 if (!saveImageNodeId) {
                     console.log("Could not find SaveImage node in the workflow.");
                     resolve(null);
@@ -2130,7 +2164,7 @@ function readImageMetadata(file) {
                         const node = workflow[currentId];
                         if (!node) continue;
                         if (node.class_type === targetClassType) return { id: currentId, node: node };
-                        
+
                         if (node.inputs) {
                             for (const input of Object.values(node.inputs)) {
                                 if (Array.isArray(input) && typeof input[0] === 'string') {
@@ -2141,7 +2175,7 @@ function readImageMetadata(file) {
                     }
                     return null;
                 };
-                
+
                 const ksamplerInfo = findUpstreamAncestor(saveImageNodeId, 'KSampler');
 
                 if (!ksamplerInfo) {
@@ -2149,15 +2183,15 @@ function readImageMetadata(file) {
                     resolve(null);
                     return;
                 }
-                
+
                 const ksamplerNode = ksamplerInfo.node;
                 const ksamplerInputs = ksamplerNode.inputs;
                 console.log("Found KSampler node:", ksamplerInfo.id, ksamplerNode);
 
-                // 3. Get positive and negative prompts using the new recursive function
+                // 3. Get positive and negative prompts
                 const posPromptNodeKey = ksamplerInputs.positive[0];
                 const negPromptNodeKey = ksamplerInputs.negative[0];
-                
+
                 const positive_prompt = getFullPromptText(posPromptNodeKey, workflow);
                 const negative_prompt = getFullPromptText(negPromptNodeKey, workflow);
 
